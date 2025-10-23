@@ -1,0 +1,80 @@
+tabel di supabase:
+
+Mahasiswa:
+create table mahasiswa (
+  id bigserial primary key,
+  nama text not null,
+  program_studi text not null,
+  umur int not null,
+  jenis_kelamin boolean not null,   -- true = laki-laki, false = perempuan
+  kota text not null
+);
+
+Tugas:
+create table tugas (
+  id serial primary key,
+  judul text not null,
+  kategori text not null,     -- contoh: "Read Aloud Short", "Describe Picture"
+  teks text not null,
+  prep_time int not null,     -- detik
+  record_time int not null    -- detik
+);
+
+Seed tugas:
+insert into tugas (judul, kategori, teks, prep_time, record_time)
+values
+('Tugas 1', 'Read Aloud Short', 
+ 'The rapid advancement of technology has transformed the way we communicate with each other.', 
+ 5, 10),
+
+('Tugas 2', 'Read Aloud Short', 
+ 'With a tear in your eye, you will watch as your dress begins to tear.', 
+ 5, 10),
+
+('Tugas 3', 'Read Aloud Long', 
+ 'You don''t need to spend all of your hard earned money on bakery bread. Making your own bread at home is easy with the new Double Duty Dough Mixer by Berring. Unlike other bread machines that can be difficult to clean and store, the Double Duty Dough Mixer breaks down into five parts that can go directly into your dishwasher. This stainless steel appliance will mix dough for you in a fraction of the time it takes to knead dough by hand. The automated delay feature at the beginning of the mix cycle gives your ingredients time to reach room temperature, ensuring that your breads will rise as high as bakery bread. We guarantee that the accompanying Berring Best Breads recipe book will be a family favourite.', 
+ 30, 75),
+
+('Tugas 4', 'Describe Picture', 
+ 'Describe this picture using complete sentences and clear descriptions. Explain who is in the picture, what is happening, and the overall atmosphere.', 
+ 30, 60),
+
+('Tugas 5', 'Free Speech Daily Life', 
+ 'Do you think people should be held responsible for the consequences of what they say in daily life? Give an example to support your answer.', 
+ 30, 90),
+
+('Tugas 6', 'Free Speech Specific Topic', 
+ 'Discuss the course you enjoyed most at university, describe a course you found challenging, and explain whether you think universities should focus more on practical skills or theoretical knowledge.', 
+ 30, 120);
+
+Rekaman:
+create table rekaman_mahasiswa (
+  id bigserial primary key,
+  mahasiswa_id bigint references mahasiswa(id) on delete cascade,
+  tugas_id int references tugas(id) on delete cascade,
+  audio_url text not null,                -- URL di Supabase Storage
+  uploaded_at timestamp default now()
+);
+
+Score:
+create table score_mahasiswa (
+  id bigserial primary key,
+  rekaman_id bigint references rekaman_mahasiswa(id) on delete cascade,
+  score_cefr text,                -- contoh: "B2", "C1", "C2"
+  fluency numeric(4,2),
+  pronunciation numeric(4,2),
+  prosody numeric(4,2),
+  coherence numeric(4,2),
+  topic_relevance numeric(4,2),
+  complexity numeric(4,2),
+  accuracy numeric(4,2),
+  analyzed_at timestamp default now()
+);
+
+create table gambar (
+  id bigserial primary key,
+  topic text not null,                                  -- topik gambar, misal "Daily Life", "Workplace"
+  image_url text not null,                              -- URL gambar di Supabase Storage
+  uploaded_at timestamp default now()
+);
+
