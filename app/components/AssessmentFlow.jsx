@@ -230,6 +230,7 @@ function useWebSpeech() {
 
 function useMediaRecorder() {
   const mediaRef = useRef(null);
+  const pendingStreamRef = useRef(null);
   const [supported, setSupported] = useState(false);
   const [permissionError, setPermissionError] = useState("");
   const [isRecording, setIsRecording] = useState(false);
@@ -254,12 +255,19 @@ function useMediaRecorder() {
         setSupported(false);
         return false;
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Immediately stop to only request permission without recording
-      stream.getTracks().forEach((t) => t.stop());
-      setPermissionError("");
-      setSupported(true);
-      return true;
+      // Acquire a stream and keep it pending so starting the recorder reuses the same stream
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // store pending stream for later reuse in start()
+        pendingStreamRef.current = stream;
+        setPermissionError("");
+        setSupported(true);
+        return true;
+      } catch (e) {
+        // fallback: clear pending
+        pendingStreamRef.current = null;
+        throw e;
+      }
     } catch (e) {
       console.error(e);
       setPermissionError(e?.message || String(e));
@@ -274,13 +282,17 @@ function useMediaRecorder() {
         setSupported(false);
         return;
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Reuse pending stream if available to avoid re-requesting device
+      const stream = pendingStreamRef.current || await navigator.mediaDevices.getUserMedia({ audio: true });
+      // clear pending reference because we'll use it now
+      pendingStreamRef.current = null;
       const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
       const localChunks = [];
       mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) localChunks.push(e.data); };
       mr.onstop = () => {
         setChunks(localChunks);
-        stream.getTracks().forEach((t) => t.stop());
+        // stop tracks when recorder stops
+        try { stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
         setIsRecording(false);
       };
       mediaRef.current = mr;
@@ -301,6 +313,8 @@ function useMediaRecorder() {
   }, []);
 
   const reset = useCallback(() => {
+    // stop and clear any pending stream that was created by requestPermission
+    try { if (pendingStreamRef.current) { pendingStreamRef.current.getTracks().forEach(t=>t.stop()); pendingStreamRef.current = null; } } catch(_){}
     setChunks([]);
   }, []);
 
@@ -413,16 +427,19 @@ export default function AssessmentFlow() {
       function startRecordCountdown() {
         setRecordReady(true);
         // small delay before starting recorder to allow UI update showing prep=0
-        setTimeout(() => {
+          setTimeout(() => {
           // Start Web Speech recognition alongside recording (best-effort), ensuring fresh start per task
           (async () => {
             try {
               // Clear UI text but keep mic session if it's already running from mic test
               ws.reset();
               await ws.beginForTask();
+              // give recognition a small moment to stabilize before starting the recorder
+              await new Promise((r) => setTimeout(r, 300));
             } catch (_) {}
+            // start audio recording after speech recognizer is primed
+            try { start(); } catch (_) {}
           })();
-          start();
           const recEndAt = Date.now() + rec * 1000;
           recTimer = setInterval(() => {
             const msLeft = recEndAt - Date.now();
