@@ -716,7 +716,16 @@ export default function AssessmentFlow() {
           {/* Large title for desktop, hidden on mobile */}
           <h1 className="hidden md:block text-3xl font-extrabold tracking-tight">I‑Speak Assessment</h1>
 
-          {mahasiswa && <div className="text-sm text-gray-600">{mahasiswa?.nama} · Step {Math.min(step,6)}/6</div>}
+          {mahasiswa && (
+            <div className="flex items-center gap-3">
+              <div className="text-sm text-gray-600">{mahasiswa?.nama} · Step {Math.min(step,6)}/6</div>
+              {/* Listening indicator */}
+              <div className="flex items-center gap-2">
+                <div className={`w-3 h-3 rounded-full ${ws.listening ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} aria-hidden="true" />
+                <div className={`text-xs ${ws.listening ? 'text-green-700' : 'text-gray-500'}`}>{ws.listening ? 'Listening' : 'Not listening'}</div>
+              </div>
+            </div>
+          )}
         </div>
         {/* Progress bar for steps */}
         <div className="w-full h-2 bg-gray-200 rounded-full mb-4 overflow-hidden">
@@ -835,8 +844,14 @@ export default function AssessmentFlow() {
               {/* Live recognized text preview */}
               <div className="mt-3 text-xs">
                 <div className="text-gray-600 mb-1">Recognized text (auto):</div>
-                <div className="p-2 rounded border bg-gray-50 min-h-10 text-gray-800">
-                  {(ws.finalText || ws.interimText || recognizedByTask[currentTugas?.id] || '').trim() || <span className="text-gray-400">(empty)</span>}
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded border bg-gray-50 min-h-10 text-gray-800 flex-1">
+                    {(ws.finalText || ws.interimText || recognizedByTask[currentTugas?.id] || '').trim() || <span className="text-gray-400">(empty)</span>}
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <div className={`w-3 h-3 rounded-full ${ws.listening ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} aria-hidden="true" />
+                    <div className="text-xxs text-gray-500 mt-1">{ws.listening ? 'Listening' : ''}</div>
+                  </div>
                 </div>
                 {!ws.supported && (
                   <div className="text-amber-700 bg-amber-50 border border-amber-100 rounded p-2 mt-2">Browser Web Speech API not supported; transcript will be empty unless entered manually later.</div>
