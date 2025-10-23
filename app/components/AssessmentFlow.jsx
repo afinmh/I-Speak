@@ -60,11 +60,11 @@ function useWebSpeech() {
   const [finalText, setFinalText] = useState("");
   const [interimText, setInterimText] = useState("");
   const lastFinalRef = useRef("");
+
   const retryRef = useRef(0);
-  const maxRetries = 2;
+  const maxRetries = 3;
   const endResolveRef = useRef(null);
-  const desiredRef = useRef(false); // whether we want recognition running (per task)
-  const sessionRef = useRef(0); // increment per beginForTask to isolate restarts
+  const desiredRef = useRef(false);
   const restartTimerRef = useRef(null);
   const restartCountRef = useRef(0);
   const lastRestartAtRef = useRef(0);
@@ -74,46 +74,38 @@ function useWebSpeech() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-  const ua = navigator.userAgent || "";
-  isIOSRef.current = /iP(hone|od|ad)/.test(ua);
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const ua = navigator.userAgent || '';
+    isIOSRef.current = /iP(hone|od|ad)/.test(ua);
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     setSupported(!!SR);
     if (!SR) return;
     const rec = new SR();
     rec.lang = 'en-US';
-  // On iOS, continuous/interim can be unstable; use short turns and restart
-  rec.interimResults = !isIOSRef.current;
-  rec.continuous = !isIOSRef.current;
-    rec.onstart = () => { setListening(true); };
+    rec.interimResults = true;
+    rec.continuous = true;
+
+    rec.onstart = () => setListening(true);
+
     rec.onresult = (evt) => {
-      // Build fresh from current session and collapse consecutive duplicates
       let finals = '';
       let interim = '';
-      const len = evt.results.length;
-      for (let i = 0; i < len; i++) {
+      for (let i = 0; i < evt.results.length; i++) {
         const r = evt.results[i];
         const t = r?.[0]?.transcript || '';
         if (!t) continue;
         if (r.isFinal) finals += t + ' ';
         else interim += t + ' ';
       }
-      const dedupConsecutive = (s) => s
-        .replace(/\s+/g, ' ')
-        .trim()
-        .split(' ')
-        .filter((w, i, a) => i === 0 || w.toLowerCase() !== a[i-1].toLowerCase())
-        .join(' ');
-      // Remove immediate repeated sequences up to maxSeq words (collapse duplicates)
+
+      const dedupConsecutive = (s) => s.replace(/\s+/g, ' ').trim().split(' ').filter((w, i, a) => i === 0 || w.toLowerCase() !== a[i-1].toLowerCase()).join(' ');
       const collapseRepeatedSequences = (s, maxSeq = 4) => {
         if (!s) return '';
         const words = s.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
         let i = 0;
         while (i < words.length) {
           let removed = false;
-          // try longest sequence first
           for (let k = Math.min(maxSeq, Math.floor((words.length - i) / 2)); k >= 1; k--) {
             const aStart = i;
-            const aEnd = i + k; // exclusive
             const bStart = i + k;
             const bEnd = i + 2 * k;
             if (bEnd > words.length) continue;
@@ -121,20 +113,15 @@ function useWebSpeech() {
             for (let t = 0; t < k; t++) {
               if (words[aStart + t].toLowerCase() !== words[bStart + t].toLowerCase()) { match = false; break; }
             }
-            if (match) {
-              // remove the second duplicate block
-              words.splice(bStart, k);
-              removed = true;
-              break;
-            }
+            if (match) { words.splice(bStart, k); removed = true; break; }
           }
           if (!removed) i += 1;
         }
         return words.join(' ');
       };
-      let finalsClean = collapseRepeatedSequences(dedupConsecutive(finals), 4);
-      let interimClean = collapseRepeatedSequences(dedupConsecutive(interim), 4);
-      // Avoid regressing final text; only update when it actually changes
+
+      const finalsClean = collapseRepeatedSequences(dedupConsecutive(finals), 4);
+      const interimClean = collapseRepeatedSequences(dedupConsecutive(interim), 4);
       if (finalsClean !== lastFinalRef.current) {
         lastFinalRef.current = finalsClean;
         setFinalText(finalsClean);
@@ -142,33 +129,28 @@ function useWebSpeech() {
       setInterimText(interimClean);
       lastResultAtRef.current = Date.now();
     };
+
     rec.onerror = (e) => {
       const err = e?.error || String(e);
       setError(err);
-      // If desired, quickly attempt a gentle restart to avoid going to false listening
       if (desiredRef.current && retryRef.current < maxRetries) {
         retryRef.current += 1;
         try { rec.stop(); } catch (_) {}
-        // preemptively show listening to avoid UI flicker
         setListening(true);
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-        restartTimerRef.current = setTimeout(() => {
-          try { rec.start(); } catch (_) { setListening(false); }
-        }, 120 * retryRef.current);
+        restartTimerRef.current = setTimeout(() => { try { rec.start(); } catch (_) { setListening(false); } }, 120 * retryRef.current);
       } else {
-        // otherwise show not listening
         setListening(false);
       }
     };
+
     rec.onend = () => {
-      // If stopAsync is awaiting, resolve and skip auto-restart
       if (typeof endResolveRef.current === 'function') {
         try { endResolveRef.current(); } catch (_) {}
         endResolveRef.current = null;
         setListening(false);
         return;
       }
-      // Auto-restart quickly when still desired to minimize missed speech
       if (desiredRef.current) {
         const now = Date.now();
         const since = now - (lastRestartAtRef.current || 0);
@@ -177,11 +159,8 @@ function useWebSpeech() {
           restartCountRef.current += 1;
           if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
           const delay = isIOSRef.current ? 120 : 60;
-          // mark listening true preemptively to avoid UI flipping to false during tiny gap
           setListening(true);
-          restartTimerRef.current = setTimeout(() => {
-            try { rec.start(); } catch (e) { setListening(false); }
-          }, delay);
+          restartTimerRef.current = setTimeout(() => { try { rec.start(); } catch (_) { setListening(false); } }, delay);
         } else {
           setListening(false);
         }
@@ -189,25 +168,24 @@ function useWebSpeech() {
         setListening(false);
       }
     };
+
     recRef.current = rec;
-    return () => {
-      try { rec.stop(); } catch (_) {}
-      recRef.current = null;
-      if (watchdogRef.current) { clearInterval(watchdogRef.current); watchdogRef.current = null; }
-    };
+    return () => { try { rec.stop(); } catch (_) {} recRef.current = null; if (watchdogRef.current) { clearInterval(watchdogRef.current); watchdogRef.current = null; } };
   }, []);
 
   const start = useCallback(() => {
-    setError("");
     retryRef.current = 0;
+    desiredRef.current = true;
     if (!recRef.current) return false;
-    if (listening) return true;
-    try { recRef.current.start(); setListening(true); return true; } catch (e) { setError(e?.message || String(e)); return false; }
-  }, [listening]);
-  const stop = useCallback(() => {
-    if (!recRef.current) return;
-    try { recRef.current.stop(); } catch (_) {}
+    try { recRef.current.start(); setListening(true); return true; } catch (e) { setError(e?.message || String(e)); setListening(false); return false; }
   }, []);
+
+  const stop = useCallback(() => {
+    desiredRef.current = false;
+    try { recRef.current && recRef.current.stop(); } catch (_) {}
+    setListening(false);
+  }, []);
+
   const stopAsync = useCallback(() => {
     return new Promise((resolve) => {
       if (!recRef.current) { resolve(); return; }
@@ -215,43 +193,37 @@ function useWebSpeech() {
       try { recRef.current.stop(); } catch (_) { resolve(); }
     });
   }, []);
+
   const beginFresh = useCallback(async () => {
     setError("");
+    // stop if it's running
     if (listening) {
       await stopAsync();
     }
     await new Promise((r) => setTimeout(r, 100));
     try { recRef.current && recRef.current.start(); setListening(true); } catch (e) { setError(e?.message || String(e)); }
   }, [listening, stopAsync]);
+
   const beginForTask = useCallback(async () => {
     desiredRef.current = true;
-    sessionRef.current += 1;
-    restartCountRef.current = 0;
-    lastResultAtRef.current = Date.now();
-    // Start watchdog to refresh session after long inactivity (~20s)
-    if (watchdogRef.current) { clearInterval(watchdogRef.current); watchdogRef.current = null; }
+    // start watchdog to auto-restart on small pauses
+    if (watchdogRef.current) { clearInterval(watchdogRef.current); }
     watchdogRef.current = setInterval(() => {
-      if (!desiredRef.current || !recRef.current) return;
-      const now = Date.now();
-      const idle = now - (lastResultAtRef.current || 0);
-      if (listening && idle > 20000) {
+      const idle = Date.now() - (lastResultAtRef.current || 0);
+      if (desiredRef.current && recRef.current && idle > 20000) {
         try { recRef.current.stop(); } catch (_) {}
-        // onend will auto-restart due to desiredRef
-        lastResultAtRef.current = Date.now();
       }
     }, 3000);
-    // If already listening (e.g., continued from mic test), do not restart; just mark desired
-    if (!listening) {
-      await beginFresh();
-    }
+    if (!listening) await beginFresh();
   }, [beginFresh, listening]);
+
   const endForTask = useCallback(async () => {
     desiredRef.current = false;
-    if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
     if (watchdogRef.current) { clearInterval(watchdogRef.current); watchdogRef.current = null; }
     await stopAsync();
   }, [stopAsync]);
-  const reset = useCallback(() => { setFinalText(""); setInterimText(""); setError(""); }, []);
+
+  const reset = useCallback(() => { setFinalText(""); setInterimText(""); setError(""); lastFinalRef.current = ''; }, []);
 
   return { supported, listening, error, finalText, interimText, start, stop, stopAsync, beginFresh, beginForTask, endForTask, reset };
 }
