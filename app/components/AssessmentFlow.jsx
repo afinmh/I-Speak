@@ -102,9 +102,39 @@ function useMediaRecorder() {
         return;
       }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      // Choose a mimeType that's supported by the browser (Safari/iOS often dislikes audio/webm)
+      let mr = null;
+      const candidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+        "audio/m4a",
+        "audio/mpeg"
+      ];
+      let chosen = null;
+      try {
+        for (const c of candidates) {
+          if (typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported(c)) {
+            chosen = c;
+            break;
+          }
+        }
+        try {
+          mr = chosen ? new MediaRecorder(stream, { mimeType: chosen }) : new MediaRecorder(stream);
+        } catch (innerErr) {
+          // Fallback: try without mimeType (some Safari builds reject unknown mime types)
+          try { mr = new MediaRecorder(stream); chosen = null; } catch (e) { throw innerErr || e; }
+        }
+      } catch (e) {
+        // If MediaRecorder construction fails, stop tracks and surface an error
+        stream.getTracks().forEach((t) => t.stop());
+        console.error("MediaRecorder init failed", e);
+        setPermissionError(e?.message || String(e));
+        setSupported(false);
+        return;
+      }
       const localChunks = [];
-      mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) localChunks.push(e.data); };
+      mr.ondataavailable = (e) => { if (e?.data && e.data.size > 0) localChunks.push(e.data); };
       mr.onstop = () => {
         setChunks(localChunks);
         stream.getTracks().forEach((t) => t.stop());
@@ -113,7 +143,8 @@ function useMediaRecorder() {
       mediaRef.current = mr;
       setChunks([]);
       setIsRecording(true);
-      mr.start();
+      // Start with default timeslice (let the browser buffer) — some browsers emit dataavailable only on stop
+      try { mr.start(); } catch (e) { console.warn("MediaRecorder.start failed", e); }
     } catch (e) {
       console.error(e);
       setPermissionError(e?.message || String(e));
