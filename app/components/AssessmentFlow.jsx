@@ -65,6 +65,7 @@ function useWebSpeech() {
   const maxRetries = 3;
   const endResolveRef = useRef(null);
   const desiredRef = useRef(false);
+  const startPendingRef = useRef(false);
   const restartTimerRef = useRef(null);
   const restartCountRef = useRef(0);
   const lastRestartAtRef = useRef(0);
@@ -138,7 +139,19 @@ function useWebSpeech() {
         try { rec.stop(); } catch (_) {}
         setListening(true);
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-        restartTimerRef.current = setTimeout(() => { try { rec.start(); } catch (_) { setListening(false); } }, 120 * retryRef.current);
+        restartTimerRef.current = setTimeout(() => {
+          try {
+            // suppress duplicate-start errors
+            rec.start();
+          } catch (errStart) {
+            const m = errStart?.message || '';
+            if (m.toLowerCase().includes('already started')) {
+              // ignore — another start is in-flight
+            } else {
+              setListening(false);
+            }
+          }
+        }, 120 * retryRef.current);
       } else {
         setListening(false);
       }
@@ -160,7 +173,18 @@ function useWebSpeech() {
           if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
           const delay = isIOSRef.current ? 120 : 60;
           setListening(true);
-          restartTimerRef.current = setTimeout(() => { try { rec.start(); } catch (_) { setListening(false); } }, delay);
+          restartTimerRef.current = setTimeout(() => {
+            try {
+              rec.start();
+            } catch (errStart) {
+              const m = errStart?.message || '';
+              if (m.toLowerCase().includes('already started')) {
+                // another start won the race — keep listening state
+              } else {
+                setListening(false);
+              }
+            }
+          }, delay);
         } else {
           setListening(false);
         }
@@ -177,7 +201,27 @@ function useWebSpeech() {
     retryRef.current = 0;
     desiredRef.current = true;
     if (!recRef.current) return false;
-    try { recRef.current.start(); setListening(true); return true; } catch (e) { setError(e?.message || String(e)); setListening(false); return false; }
+    // prevent concurrent start attempts
+    if (startPendingRef.current) return true;
+    startPendingRef.current = true;
+    try {
+      recRef.current.start();
+      setListening(true);
+      return true;
+    } catch (e) {
+      const msg = e?.message || String(e);
+      // treat duplicate-start as a no-op (start already in progress)
+      if (String(msg).toLowerCase().includes('already started')) {
+        // keep listening state as true
+        setListening(true);
+        return true;
+      }
+      setError(msg);
+      setListening(false);
+      return false;
+    } finally {
+      startPendingRef.current = false;
+    }
   }, []);
 
   const stop = useCallback(() => {
@@ -201,7 +245,20 @@ function useWebSpeech() {
       await stopAsync();
     }
     await new Promise((r) => setTimeout(r, 100));
-    try { recRef.current && recRef.current.start(); setListening(true); } catch (e) { setError(e?.message || String(e)); }
+    try {
+      if (recRef.current) {
+        try { recRef.current.start(); setListening(true); }
+        catch (e) {
+          const m = e?.message || '';
+          if (m.toLowerCase().includes('already started')) {
+            // ignore
+            setListening(true);
+          } else {
+            setError(m);
+          }
+        }
+      }
+    } catch (e) { setError(e?.message || String(e)); }
   }, [listening, stopAsync]);
 
   const beginForTask = useCallback(async () => {
@@ -431,8 +488,7 @@ export default function AssessmentFlow() {
           // Start Web Speech recognition alongside recording (best-effort), ensuring fresh start per task
           (async () => {
             try {
-              // Clear UI text but keep mic session if it's already running from mic test
-              ws.reset();
+              // Do NOT reset the recognition final text here (preserve transcript shown to user)
               await ws.beginForTask();
               // give recognition a small moment to stabilize before starting the recorder
               await new Promise((r) => setTimeout(r, 300));
