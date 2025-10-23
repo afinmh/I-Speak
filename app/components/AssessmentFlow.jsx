@@ -487,14 +487,34 @@ export default function AssessmentFlow() {
           setTimeout(() => {
           // Start Web Speech recognition alongside recording (best-effort), ensuring fresh start per task
           (async () => {
+            // Keep the text shown before we change anything so we can detect activity
+            const preText = (ws.finalText || ws.interimText || '').trim();
+
+            // Attempt A: start recognition first (existing approach)
             try {
-              // Do NOT reset the recognition final text here (preserve transcript shown to user)
               await ws.beginForTask();
-              // give recognition a small moment to stabilize before starting the recorder
-              await new Promise((r) => setTimeout(r, 300));
             } catch (_) {}
-            // start audio recording after speech recognizer is primed
-            try { start(); } catch (_) {}
+            // give recognition a small moment to stabilize before starting the recorder
+            await new Promise((r) => setTimeout(r, 300));
+            try { await start(); } catch (_) {}
+
+            // Wait briefly to see if ASR produced any new output
+            await new Promise((r) => setTimeout(r, 700));
+            const afterA = (ws.finalText || ws.interimText || '').trim();
+            if (afterA === preText) {
+              // No change detected — mobile browsers sometimes pause/stop recognition when MediaRecorder starts.
+              // Fallback: try recorder-first then start recognition under the active stream.
+              try { await ws.stopAsync(); } catch (_) {}
+              // small pause to ensure recognizer stopped
+              await new Promise((r) => setTimeout(r, 120));
+              try { await start(); } catch (_) {}
+              // Give the recorder a moment to start using the pending stream
+              await new Promise((r) => setTimeout(r, 250));
+              // Start a fresh recognizer after recorder is active
+              try { await ws.beginFresh(); } catch (_) {}
+              // Final stabilization delay
+              await new Promise((r) => setTimeout(r, 400));
+            }
           })();
           const recEndAt = Date.now() + rec * 1000;
           recTimer = setInterval(() => {
