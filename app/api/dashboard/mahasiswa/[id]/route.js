@@ -26,13 +26,12 @@ async function requireAuth(req /** @type {NextRequest} */) {
   return data.user;
 }
 
-export async function GET(req, ctx) {
+export async function GET(req, { params }) {
   try {
     const user = await requireAuth(req);
     if (!user) return error("Unauthorized", 401);
 
-    const p = await ctx?.params;
-    const id = Number(p?.id);
+    const id = Number(params?.id);
     if (!id) return error("Invalid mahasiswa id", 400);
 
     const supa = getServiceClient();

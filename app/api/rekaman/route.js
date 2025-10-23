@@ -11,7 +11,6 @@ export async function POST(req /** @type {NextRequest} */) {
     const mahasiswa_id = Number(form.get("mahasiswa_id"));
     const tugas_id = Number(form.get("tugas_id"));
     const file = form.get("file");
-    const transkrip = (form.get("transkrip") || "").toString();
     if (!mahasiswa_id || !tugas_id || !file) return error("Form fields: mahasiswa_id, tugas_id, file wajib", 400);
 
     const supa = getServiceClient();
@@ -32,7 +31,7 @@ export async function POST(req /** @type {NextRequest} */) {
     // Insert rekaman
     const { data, error: derr } = await supa
       .from("rekaman_mahasiswa")
-      .insert([{ mahasiswa_id, tugas_id, audio_url, transkrip: transkrip || null }])
+      .insert([{ mahasiswa_id, tugas_id, audio_url }])
       .select("*")
       .single();
     if (derr) return error(derr.message, 500);

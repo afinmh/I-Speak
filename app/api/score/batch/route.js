@@ -23,13 +23,6 @@ function numericFromRaw(raw) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function toOneBasedIfClass(n) {
-  const v = Number(n);
-  // If it's an integer in [0,5], treat it as 0-based class index and convert to 1..6
-  if (Number.isInteger(v) && v >= 0 && v <= 5) return v + 1;
-  return v;
-}
-
 export async function POST(req /** @type {NextRequest} */) {
   try {
     const body = await req.json();
@@ -60,7 +53,7 @@ export async function POST(req /** @type {NextRequest} */) {
       for (const k of keys) {
         const vec = buildSubconstructVector(features, k);
         const model = await loadModel(k, { baseUrl });
-        scores[k] = toOneBasedIfClass(numericFromRaw(model.predict(vec)));
+        scores[k] = numericFromRaw(model.predict(vec));
       }
       const cefrModel = await loadModel("CEFR", { baseUrl });
       const cefrIdx = numericFromRaw(cefrModel.predict(keys.map((k) => scores[k])));

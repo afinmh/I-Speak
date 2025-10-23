@@ -3,15 +3,15 @@
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import Countdown from "@/app/components/Countdown";
-// Whisper fallback removed per requirements; no global Whisper state needed
+import { subscribeWhisper, getWhisperState } from "@/lib/globalWhisperState";
 import useAssessment from "@/hooks/useAssessment";
 
 const FeatureComputer = forwardRef(function FeatureComputer({ onStatus }, ref) {
-  const { file, setFile, setRefTopic, setTranscript, run, result, status } = useAssessment();
+  const { file, setFile, setRefTopic, setModel, setTranscript, run, result, status } = useAssessment();
   const resolverRef = useRef(null);
   const onStatusRef = useRef(onStatus);
   // Pending start coordination to ensure state is set before calling run()
-  const pendingStartRef = useRef(null); // { file, refTopic, transcript }
+  const pendingStartRef = useRef(null); // { file, refTopic }
 
   useEffect(() => {
     if (result && resolverRef.current) {
@@ -37,12 +37,16 @@ const FeatureComputer = forwardRef(function FeatureComputer({ onStatus }, ref) {
   }, [file, run]);
 
   useImperativeHandle(ref, () => ({
-    async compute(file, refTopic = "", transcript = "") {
+    async compute(file, refTopic = "") {
       return new Promise(async (resolve) => {
         resolverRef.current = resolve;
-        pendingStartRef.current = { file, refTopic, transcript };
+        pendingStartRef.current = { file, refTopic };
+        // Force Whisper-only transcript mode for assessment: don't use DB/manual transcript
+        try {
+          setModel("whisper");
+          setTranscript("");
+        } catch (_) {}
         setRefTopic(refTopic);
-        setTranscript(transcript || "");
         setFile(file);
         // run() will be called by the effect when file state reflects this file
       });
@@ -51,243 +55,8 @@ const FeatureComputer = forwardRef(function FeatureComputer({ onStatus }, ref) {
   return null;
 });
 
-// Simple Web Speech API hook for en-US recognition with interim results
-function useWebSpeech() {
-  const recRef = useRef(null);
-  const [supported, setSupported] = useState(false);
-  const [listening, setListening] = useState(false);
-  const [error, setError] = useState("");
-  const [finalText, setFinalText] = useState("");
-  const [interimText, setInterimText] = useState("");
-  const lastFinalRef = useRef("");
-
-  const retryRef = useRef(0);
-  const maxRetries = 3;
-  const endResolveRef = useRef(null);
-  const desiredRef = useRef(false);
-  const startPendingRef = useRef(false);
-  const restartTimerRef = useRef(null);
-  const restartCountRef = useRef(0);
-  const lastRestartAtRef = useRef(0);
-  const lastResultAtRef = useRef(0);
-  const watchdogRef = useRef(null);
-  const isIOSRef = useRef(false);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const ua = navigator.userAgent || '';
-    isIOSRef.current = /iP(hone|od|ad)/.test(ua);
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    setSupported(!!SR);
-    if (!SR) return;
-    const rec = new SR();
-    rec.lang = 'en-US';
-    rec.interimResults = true;
-    rec.continuous = true;
-
-    rec.onstart = () => setListening(true);
-
-    rec.onresult = (evt) => {
-      let finals = '';
-      let interim = '';
-      for (let i = 0; i < evt.results.length; i++) {
-        const r = evt.results[i];
-        const t = r?.[0]?.transcript || '';
-        if (!t) continue;
-        if (r.isFinal) finals += t + ' ';
-        else interim += t + ' ';
-      }
-
-      const dedupConsecutive = (s) => s.replace(/\s+/g, ' ').trim().split(' ').filter((w, i, a) => i === 0 || w.toLowerCase() !== a[i-1].toLowerCase()).join(' ');
-      const collapseRepeatedSequences = (s, maxSeq = 4) => {
-        if (!s) return '';
-        const words = s.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
-        let i = 0;
-        while (i < words.length) {
-          let removed = false;
-          for (let k = Math.min(maxSeq, Math.floor((words.length - i) / 2)); k >= 1; k--) {
-            const aStart = i;
-            const bStart = i + k;
-            const bEnd = i + 2 * k;
-            if (bEnd > words.length) continue;
-            let match = true;
-            for (let t = 0; t < k; t++) {
-              if (words[aStart + t].toLowerCase() !== words[bStart + t].toLowerCase()) { match = false; break; }
-            }
-            if (match) { words.splice(bStart, k); removed = true; break; }
-          }
-          if (!removed) i += 1;
-        }
-        return words.join(' ');
-      };
-
-      const finalsClean = collapseRepeatedSequences(dedupConsecutive(finals), 4);
-      const interimClean = collapseRepeatedSequences(dedupConsecutive(interim), 4);
-      if (finalsClean !== lastFinalRef.current) {
-        lastFinalRef.current = finalsClean;
-        setFinalText(finalsClean);
-      }
-      setInterimText(interimClean);
-      lastResultAtRef.current = Date.now();
-    };
-
-    rec.onerror = (e) => {
-      const err = e?.error || String(e);
-      setError(err);
-      if (desiredRef.current && retryRef.current < maxRetries) {
-        retryRef.current += 1;
-        try { rec.stop(); } catch (_) {}
-        setListening(true);
-        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-        restartTimerRef.current = setTimeout(() => {
-          try {
-            // suppress duplicate-start errors
-            rec.start();
-          } catch (errStart) {
-            const m = errStart?.message || '';
-            if (m.toLowerCase().includes('already started')) {
-              // ignore — another start is in-flight
-            } else {
-              setListening(false);
-            }
-          }
-        }, 120 * retryRef.current);
-      } else {
-        setListening(false);
-      }
-    };
-
-    rec.onend = () => {
-      if (typeof endResolveRef.current === 'function') {
-        try { endResolveRef.current(); } catch (_) {}
-        endResolveRef.current = null;
-        setListening(false);
-        return;
-      }
-      if (desiredRef.current) {
-        const now = Date.now();
-        const since = now - (lastRestartAtRef.current || 0);
-        if (restartCountRef.current < 50 && since > 50) {
-          lastRestartAtRef.current = now;
-          restartCountRef.current += 1;
-          if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-          const delay = isIOSRef.current ? 120 : 60;
-          setListening(true);
-          restartTimerRef.current = setTimeout(() => {
-            try {
-              rec.start();
-            } catch (errStart) {
-              const m = errStart?.message || '';
-              if (m.toLowerCase().includes('already started')) {
-                // another start won the race — keep listening state
-              } else {
-                setListening(false);
-              }
-            }
-          }, delay);
-        } else {
-          setListening(false);
-        }
-      } else {
-        setListening(false);
-      }
-    };
-
-    recRef.current = rec;
-    return () => { try { rec.stop(); } catch (_) {} recRef.current = null; if (watchdogRef.current) { clearInterval(watchdogRef.current); watchdogRef.current = null; } };
-  }, []);
-
-  const start = useCallback(() => {
-    retryRef.current = 0;
-    desiredRef.current = true;
-    if (!recRef.current) return false;
-    // prevent concurrent start attempts
-    if (startPendingRef.current) return true;
-    startPendingRef.current = true;
-    try {
-      recRef.current.start();
-      setListening(true);
-      return true;
-    } catch (e) {
-      const msg = e?.message || String(e);
-      // treat duplicate-start as a no-op (start already in progress)
-      if (String(msg).toLowerCase().includes('already started')) {
-        // keep listening state as true
-        setListening(true);
-        return true;
-      }
-      setError(msg);
-      setListening(false);
-      return false;
-    } finally {
-      startPendingRef.current = false;
-    }
-  }, []);
-
-  const stop = useCallback(() => {
-    desiredRef.current = false;
-    try { recRef.current && recRef.current.stop(); } catch (_) {}
-    setListening(false);
-  }, []);
-
-  const stopAsync = useCallback(() => {
-    return new Promise((resolve) => {
-      if (!recRef.current) { resolve(); return; }
-      endResolveRef.current = resolve;
-      try { recRef.current.stop(); } catch (_) { resolve(); }
-    });
-  }, []);
-
-  const beginFresh = useCallback(async () => {
-    setError("");
-    // stop if it's running
-    if (listening) {
-      await stopAsync();
-    }
-    await new Promise((r) => setTimeout(r, 100));
-    try {
-      if (recRef.current) {
-        try { recRef.current.start(); setListening(true); }
-        catch (e) {
-          const m = e?.message || '';
-          if (m.toLowerCase().includes('already started')) {
-            // ignore
-            setListening(true);
-          } else {
-            setError(m);
-          }
-        }
-      }
-    } catch (e) { setError(e?.message || String(e)); }
-  }, [listening, stopAsync]);
-
-  const beginForTask = useCallback(async () => {
-    desiredRef.current = true;
-    // start watchdog to auto-restart on small pauses
-    if (watchdogRef.current) { clearInterval(watchdogRef.current); }
-    watchdogRef.current = setInterval(() => {
-      const idle = Date.now() - (lastResultAtRef.current || 0);
-      if (desiredRef.current && recRef.current && idle > 20000) {
-        try { recRef.current.stop(); } catch (_) {}
-      }
-    }, 3000);
-    if (!listening) await beginFresh();
-  }, [beginFresh, listening]);
-
-  const endForTask = useCallback(async () => {
-    desiredRef.current = false;
-    if (watchdogRef.current) { clearInterval(watchdogRef.current); watchdogRef.current = null; }
-    await stopAsync();
-  }, [stopAsync]);
-
-  const reset = useCallback(() => { setFinalText(""); setInterimText(""); setError(""); lastFinalRef.current = ''; }, []);
-
-  return { supported, listening, error, finalText, interimText, start, stop, stopAsync, beginFresh, beginForTask, endForTask, reset };
-}
-
 function useMediaRecorder() {
   const mediaRef = useRef(null);
-  const pendingStreamRef = useRef(null);
   const [supported, setSupported] = useState(false);
   const [permissionError, setPermissionError] = useState("");
   const [isRecording, setIsRecording] = useState(false);
@@ -312,19 +81,12 @@ function useMediaRecorder() {
         setSupported(false);
         return false;
       }
-      // Acquire a stream and keep it pending so starting the recorder reuses the same stream
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        // store pending stream for later reuse in start()
-        pendingStreamRef.current = stream;
-        setPermissionError("");
-        setSupported(true);
-        return true;
-      } catch (e) {
-        // fallback: clear pending
-        pendingStreamRef.current = null;
-        throw e;
-      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Immediately stop to only request permission without recording
+      stream.getTracks().forEach((t) => t.stop());
+      setPermissionError("");
+      setSupported(true);
+      return true;
     } catch (e) {
       console.error(e);
       setPermissionError(e?.message || String(e));
@@ -339,17 +101,13 @@ function useMediaRecorder() {
         setSupported(false);
         return;
       }
-      // Reuse pending stream if available to avoid re-requesting device
-      const stream = pendingStreamRef.current || await navigator.mediaDevices.getUserMedia({ audio: true });
-      // clear pending reference because we'll use it now
-      pendingStreamRef.current = null;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
       const localChunks = [];
       mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) localChunks.push(e.data); };
       mr.onstop = () => {
         setChunks(localChunks);
-        // stop tracks when recorder stops
-        try { stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+        stream.getTracks().forEach((t) => t.stop());
         setIsRecording(false);
       };
       mediaRef.current = mr;
@@ -370,8 +128,6 @@ function useMediaRecorder() {
   }, []);
 
   const reset = useCallback(() => {
-    // stop and clear any pending stream that was created by requestPermission
-    try { if (pendingStreamRef.current) { pendingStreamRef.current.getTracks().forEach(t=>t.stop()); pendingStreamRef.current = null; } } catch(_){}
     setChunks([]);
   }, []);
 
@@ -398,17 +154,11 @@ export default function AssessmentFlow() {
   const [recLeft, setRecLeft] = useState(0);
   const [recordReady, setRecordReady] = useState(false);
   const [uploaded, setUploaded] = useState([]); // [{ tugas, rekaman, file, refTopic? }]
-  // One-time mic test gating before Task 1
-  const [micTestOpen, setMicTestOpen] = useState(false);
-  const [micTestDone, setMicTestDone] = useState(false);
 
   const { supported, permissionError, isRecording, chunks, start, stop, reset, requestPermission } = useMediaRecorder();
   const featureRef = useRef(null);
   // Track which task ID has already started prep to avoid reruns for the same task
   const lastStartedTaskIdRef = useRef(null);
-  // Web Speech per-task recognized text
-  const [recognizedByTask, setRecognizedByTask] = useState({}); // { [taskId]: text }
-  const ws = useWebSpeech();
 
   // Load tugas for current step (1..6)
   useEffect(() => {
@@ -453,8 +203,6 @@ export default function AssessmentFlow() {
   // Handle prep & record timers when tugas loads (skip if already uploaded)
   useEffect(() => {
     if (!currentTugas || alreadyUploaded) return;
-    // For Task 1, delay timers until mic test is completed
-    if (step === 1 && !micTestDone) return;
     const taskId = currentTugas?.id ?? null;
     // Only start prep/record once per task ID
     if (taskId && lastStartedTaskIdRef.current === taskId) return;
@@ -484,38 +232,8 @@ export default function AssessmentFlow() {
       function startRecordCountdown() {
         setRecordReady(true);
         // small delay before starting recorder to allow UI update showing prep=0
-          setTimeout(() => {
-          // Start Web Speech recognition alongside recording (best-effort), ensuring fresh start per task
-          (async () => {
-            // Keep the text shown before we change anything so we can detect activity
-            const preText = (ws.finalText || ws.interimText || '').trim();
-
-            // Attempt A: start recognition first (existing approach)
-            try {
-              await ws.beginForTask();
-            } catch (_) {}
-            // give recognition a small moment to stabilize before starting the recorder
-            await new Promise((r) => setTimeout(r, 300));
-            try { await start(); } catch (_) {}
-
-            // Wait briefly to see if ASR produced any new output
-            await new Promise((r) => setTimeout(r, 700));
-            const afterA = (ws.finalText || ws.interimText || '').trim();
-            if (afterA === preText) {
-              // No change detected — mobile browsers sometimes pause/stop recognition when MediaRecorder starts.
-              // Fallback: try recorder-first then start recognition under the active stream.
-              try { await ws.stopAsync(); } catch (_) {}
-              // small pause to ensure recognizer stopped
-              await new Promise((r) => setTimeout(r, 120));
-              try { await start(); } catch (_) {}
-              // Give the recorder a moment to start using the pending stream
-              await new Promise((r) => setTimeout(r, 250));
-              // Start a fresh recognizer after recorder is active
-              try { await ws.beginFresh(); } catch (_) {}
-              // Final stabilization delay
-              await new Promise((r) => setTimeout(r, 400));
-            }
-          })();
+        setTimeout(() => {
+          start();
           const recEndAt = Date.now() + rec * 1000;
           recTimer = setInterval(() => {
             const msLeft = recEndAt - Date.now();
@@ -523,7 +241,6 @@ export default function AssessmentFlow() {
               setRecLeft(0);
               clearInterval(recTimer);
               try { stop(); } catch (_) {}
-              try { ws.endForTask(); } catch (_) {}
             } else {
               setRecLeft(Math.ceil(msLeft / 1000));
             }
@@ -557,23 +274,7 @@ export default function AssessmentFlow() {
       if (recTimer) clearInterval(recTimer);
       // Do not reset lastStartedTaskIdRef here to keep per-task one-time guarantee
     };
-  }, [currentTugas, alreadyUploaded, requestPermission, start, stop, step, micTestDone]);
-  // No mic check modal: directly proceed with timers per task
-
-  // Ensure recognition is not running when moving between steps/tasks
-  const prevStepRef = useRef(step);
-  useEffect(() => {
-    // Only clean up when the step actually changes (avoid firing on mic-test state changes)
-    if (prevStepRef.current !== step) {
-      // If we've just entered step 1 and the mic test is open or not yet completed,
-      // skip cleanup to avoid stopping the recognition that was started by the user gesture.
-      if (!(step === 1 && !micTestDone)) {
-        try { ws.endForTask(); ws.reset(); } catch (_) {}
-      }
-      prevStepRef.current = step;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, micTestDone]);
+  }, [currentTugas, alreadyUploaded, requestPermission, start, stop]);
 
   // When recording stops and we have chunks, upload to /api/rekaman (only once)
   useEffect(() => {
@@ -585,23 +286,19 @@ export default function AssessmentFlow() {
         setLoading(true);
         const blob = new Blob(chunks, { type: "audio/webm" });
         const file = new File([blob], `tugas_${currentTugas.id}.webm`, { type: "audio/webm" });
-  const fd = new FormData();
-  fd.set("mahasiswa_id", String(mahasiswa.id));
-  fd.set("tugas_id", String(currentTugas.id));
-  fd.set("file", file);
-  // send recognized transcript to backend for persistence
-  const recogText = (ws.finalText || ws.interimText || '').trim();
-  if (recogText) fd.set("transkrip", recogText);
-  const res = await fetch("/api/rekaman", { method: "POST", body: fd });
+        const fd = new FormData();
+        fd.set("mahasiswa_id", String(mahasiswa.id));
+        fd.set("tugas_id", String(currentTugas.id));
+        fd.set("file", file);
+        const res = await fetch("/api/rekaman", { method: "POST", body: fd });
         if (!res.ok) throw new Error("Upload rekaman gagal");
         const j = await res.json();
         // Determine reference topic: for task 4 use image topic, else use tugas text
         const refTopic = (step === 4 && imageForTask4?.topic)
           ? imageForTask4.topic
           : (currentTugas?.teks || "");
-        // stash recognition text per task id
-        setRecognizedByTask((prev) => ({ ...prev, [currentTugas.id]: recogText }));
-        setUploaded((arr) => [...arr, { tugas: currentTugas, rekaman: j?.rekaman, file, refTopic, transcript: recogText }]);
+        // Keep which task index this recording belongs to for later compute rules
+        setUploaded((arr) => [...arr, { tugas: currentTugas, rekaman: j?.rekaman, file, refTopic, stepIndex: step }]);
         reset();
         setRecordReady(false);
       } catch (e) {
@@ -640,21 +337,12 @@ export default function AssessmentFlow() {
       const j = await res.json();
       setMahasiswa(j?.mahasiswa);
       setStep(1);
-      // Start a one-time mic test modal with live recognition
-      try {
-        if (ws?.supported) {
-          setMicTestOpen(true);
-          await ws.beginFresh();
-        } else {
-          setMicTestOpen(true);
-        }
-      } catch (_) { setMicTestOpen(true); }
     } catch (e) {
       setError(e?.message || String(e));
     } finally {
       setLoading(false);
     }
-  }, [nama, prodi, umur, jk, kota, ws]);
+  }, [nama, prodi, umur, jk, kota]);
 
   const nextStep = useCallback(() => {
     if (step >= 1 && step < 6) setStep(step + 1);
@@ -669,10 +357,14 @@ export default function AssessmentFlow() {
   const [asrStatus, setAsrStatus] = useState("");
   const [lastStatusAt, setLastStatusAt] = useState(0);
   const prevStatusRef = useRef("");
+  const [whisper, setWhisper] = useState(getWhisperState());
   const pendingItemsRef = useRef([]);
-  const [showNoSupportModal, setShowNoSupportModal] = useState(true);
 
-  // No Whisper fallback; show a modal if browser ASR is unsupported
+  // keep whisper download progress synced
+  useEffect(() => {
+    const unsub = subscribeWhisper((st) => setWhisper(st));
+    return () => { if (typeof unsub === "function") unsub(); };
+  }, []);
 
   const percentFromStatus = useCallback((s) => {
     const m = String(s || "").match(/(\d{1,3})%/);
@@ -687,10 +379,21 @@ export default function AssessmentFlow() {
     setTaskProgress(uploaded.map(() => 0));
     setCurrentIdx(-1);
     try {
-      console.log("[AssessmentFlow] runScoring start", { total: uploaded.length });
-      try { await fetch("/api/debug", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ event: "runScoring-start", data: { total: uploaded.length } }) }); } catch(_) {}
-      for (let i = 0; i < uploaded.length; i++) {
-        const item = uploaded[i];
+      const itemsToCompute = uploaded
+        .map((it, idx) => ({ it, idx }))
+        .filter(({ it }) => it?.stepIndex === 6);
+
+      console.log("[AssessmentFlow] runScoring start", { total: uploaded.length, toCompute: itemsToCompute.length });
+      try { await fetch("/api/debug", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ event: "runScoring-start", data: { total: uploaded.length, toCompute: itemsToCompute.length } }) }); } catch(_) {}
+
+      if (itemsToCompute.length === 0) {
+        setError("Tidak ada rekaman untuk Task 6. Silakan rekam Task 6 dulu.");
+        return;
+      }
+
+      for (let k = 0; k < itemsToCompute.length; k++) {
+        const i = itemsToCompute[k].idx;
+        const item = itemsToCompute[k].it;
         const recId = item?.rekaman?.id;
         if (!recId) continue;
         setCurrentIdx(i);
@@ -700,12 +403,7 @@ export default function AssessmentFlow() {
         try { await fetch("/api/debug", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ event: "task-start", data: { index: i, recId, tugasId: item?.tugas?.id } }) }); } catch(_) {}
         // Use per-item reference topic; for task 4 it's the image topic
         const refText = item?.refTopic || item?.tugas?.teks || "";
-        let tx = (item?.transcript || recognizedByTask[item?.tugas?.id] || '').trim();
-        if (!tx) {
-          // Do not fallback to Whisper; proceed without ASR transcript
-          setAsrStatus("No transcript available; proceeding without ASR");
-        }
-        const res = await featureRef.current.compute(item.file, refText, tx);
+  const res = await featureRef.current.compute(item.file, refText);
         const features = res?.features;
         if (!features) throw new Error("Feature extraction failed");
         console.log("[AssessmentFlow] task features ready", { index: i, keys: Object.keys(features || {}).length });
@@ -718,6 +416,17 @@ export default function AssessmentFlow() {
         setTaskProgress((arr) => arr.map((v, idx) => idx === i ? 100 : v));
         console.log("[AssessmentFlow] task done", { index: i, recId });
         try { await fetch("/api/debug", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ event: "task-done", data: { index: i, recId } }) }); } catch(_) {}
+
+        // Immediately upload transcript to rekaman (store as 'transkrip')
+        try {
+          if (item?.stepIndex === 6 && res?.transcript) {
+            await fetch(`/api/rekaman/${recId}`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ transkrip: res.transcript })
+            });
+          }
+        } catch (_) {}
       }
       // Batch save all features at once to DB
       const items = pendingItemsRef.current.slice();
@@ -742,7 +451,7 @@ export default function AssessmentFlow() {
       setScoring(false);
       setCurrentIdx(-1);
     }
-  }, [uploaded, recognizedByTask]);
+  }, [uploaded]);
 
   return (
     <div>
@@ -781,21 +490,12 @@ export default function AssessmentFlow() {
           {/* Large title for desktop, hidden on mobile */}
           <h1 className="hidden md:block text-3xl font-extrabold tracking-tight">I‑Speak Assessment</h1>
 
-          {mahasiswa && (
-            <div className="flex items-center gap-3">
-              <div className="text-sm text-gray-600">{mahasiswa?.nama} · Step {Math.min(step,6)}/6</div>
-              {/* Listening indicator */}
-              <div className="flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full ${ws.listening ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} aria-hidden="true" />
-                <div className={`text-xs ${ws.listening ? 'text-green-700' : 'text-gray-500'}`}>{ws.listening ? 'Listening' : 'Not listening'}</div>
-              </div>
-            </div>
-          )}
+          {mahasiswa && <div className="text-sm text-gray-600">{mahasiswa?.nama} · Step {Math.min(step,6)}/6</div>}
         </div>
         {/* Progress bar for steps */}
         <div className="w-full h-2 bg-gray-200 rounded-full mb-4 overflow-hidden">
           <div
-            className="h-full bg-blue-600 transition-all"
+            className="h-full bg-black transition-all"
             style={{ width: `${Math.min(step,6) / 6 * 100}%` }}
           />
         </div>
@@ -806,30 +506,30 @@ export default function AssessmentFlow() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <label className="block">
                 <span className="text-sm">Full Name</span>
-                <input required value={nama} onChange={(e)=>setNama(e.target.value)} className="mt-1 w-full border border-gray-300 focus:border-blue-500 focus:ring-blue-500 p-2 rounded" placeholder="Your full name" />
+                <input required value={nama} onChange={(e)=>setNama(e.target.value)} className="mt-1 w-full border border-gray-300 focus:border-black focus:ring-black p-2 rounded" placeholder="Your full name" />
               </label>
               <label className="block">
                 <span className="text-sm">Major / Program</span>
-                <input required value={prodi} onChange={(e)=>setProdi(e.target.value)} className="mt-1 w-full border border-gray-300 focus:border-blue-500 focus:ring-blue-500 p-2 rounded" placeholder="e.g., Informatics" />
+                <input required value={prodi} onChange={(e)=>setProdi(e.target.value)} className="mt-1 w-full border border-gray-300 focus:border-black focus:ring-black p-2 rounded" placeholder="e.g., Informatics" />
               </label>
               <label className="block">
                 <span className="text-sm">Age</span>
-                <input required type="number" min={1} value={umur} onChange={(e)=>setUmur(e.target.value)} className="mt-1 w-full border border-gray-300 focus:border-blue-500 focus:ring-blue-500 p-2 rounded" />
+                <input required type="number" min={1} value={umur} onChange={(e)=>setUmur(e.target.value)} className="mt-1 w-full border border-gray-300 focus:border-black focus:ring-black p-2 rounded" />
               </label>
               <label className="block">
                 <span className="text-sm">Gender</span>
-                <select value={jk} onChange={(e)=>setJk(e.target.value)} className="mt-1 w-full border border-gray-300 focus:border-blue-500 focus:ring-blue-500 p-2 rounded">
+                <select value={jk} onChange={(e)=>setJk(e.target.value)} className="mt-1 w-full border border-gray-300 focus:border-black focus:ring-black p-2 rounded">
                   <option value="laki-laki">Male</option>
                   <option value="perempuan">Female</option>
                 </select>
               </label>
               <label className="block md:col-span-2">
                 <span className="text-sm">City</span>
-                <input required value={kota} onChange={(e)=>setKota(e.target.value)} className="mt-1 w-full border border-gray-300 focus:border-blue-500 focus:ring-blue-500 p-2 rounded" placeholder="Current city" />
+                <input required value={kota} onChange={(e)=>setKota(e.target.value)} className="mt-1 w-full border border-gray-300 focus:border-black focus:ring-black p-2 rounded" placeholder="Current city" />
               </label>
             </div>
             <div className="flex items-center gap-3">
-              <button disabled={loading} className="rounded-lg bg-blue-600 hover:bg-blue-700 transition text-white px-5 py-2.5 shadow">
+              <button disabled={loading} className="rounded-lg bg-black hover:bg-neutral-800 transition text-white px-5 py-2.5 shadow">
                 {loading ? "Saving..." : "Start Task 1"}
               </button>
             </div>
@@ -842,7 +542,6 @@ export default function AssessmentFlow() {
               <div className="text-sm text-gray-600">Student: {mahasiswa?.nama} • Step {step}/6</div>
               <div className={`text-sm ${supported ? "text-green-700" : "text-red-700"}`}>{supported ? "Mic Ready" : "Mic not supported"}</div>
             </div>
-            {/* Web Speech recognition is used when supported; no Whisper fallback */}
             {permissionError && (
               <div className="flex items-center justify-between text-sm text-red-700 bg-red-50 border border-red-100 rounded p-2">
                 <span>Mic error: {permissionError}</span>
@@ -902,36 +601,17 @@ export default function AssessmentFlow() {
                     <span className="text-gray-500">Auto-starts</span>
                   </div>
                   {(!supported || permissionError) && (
-                    <button onClick={requestPermission} className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700">Enable microphone</button>
+                    <button onClick={requestPermission} className="px-3 py-1 rounded bg-black text-white hover:bg-neutral-800">Enable microphone</button>
                   )}
                 </div>
               )}
-              {/* Live recognized text preview */}
-              <div className="mt-3 text-xs">
-                <div className="text-gray-600 mb-1">Recognized text (auto):</div>
-                <div className="flex items-start gap-3">
-                  <div className="p-2 rounded border bg-gray-50 min-h-10 text-gray-800 flex-1">
-                    {(ws.finalText || ws.interimText || recognizedByTask[currentTugas?.id] || '').trim() || <span className="text-gray-400">(empty)</span>}
-                  </div>
-                  <div className="flex flex-col items-center">
-                    <div className={`w-3 h-3 rounded-full ${ws.listening ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} aria-hidden="true" />
-                    <div className="text-xxs text-gray-500 mt-1">{ws.listening ? 'Listening' : ''}</div>
-                  </div>
-                </div>
-                {!ws.supported && (
-                  <div className="text-amber-700 bg-amber-50 border border-amber-100 rounded p-2 mt-2">Browser Web Speech API not supported; transcript will be empty unless entered manually later.</div>
-                )}
-                {ws.error && (
-                  <div className="text-red-700 bg-red-50 border border-red-100 rounded p-2 mt-2">Speech error: {ws.error}</div>
-                )}
-              </div>
               {alreadyUploaded && (
                 <div className="mt-4 text-sm text-green-700">Recording has been finished.</div>
               )}
             </div>
 
             <div className="flex items-center gap-2">
-              <button onClick={nextStep} disabled={!canNext} className="rounded-lg bg-blue-600 hover:bg-blue-700 transition text-white px-5 py-2.5 shadow">
+              <button onClick={nextStep} disabled={!canNext} className="rounded-lg bg-black hover:bg-neutral-800 transition text-white px-5 py-2.5 shadow">
                 {step < 6 ? (loading ? "Uploading..." : "Next Task") : "Finish"}
               </button>
             </div>
@@ -941,35 +621,41 @@ export default function AssessmentFlow() {
         {step === 7 && (
           <div className="space-y-4">
             <div className="text-sm text-gray-600">Saved recordings: {uploaded.length} file(s)</div>
+
+            {/* Overall result summary (represents student-level result) */}
+            {(() => {
+              const task6 = uploaded.find((u) => u?.stepIndex === 6);
+              const rec6 = task6?.rekaman?.id;
+              const res = rec6 ? scoreResults[rec6] : null;
+              const cefrLabel = res?.interpreted?.CEFR?.label || "-";
+              const CEFR_DESC = { A1: "Beginner", A2: "Elementary", B1: "Intermediate", B2: "Upper-Intermediate", C1: "Advanced", C2: "Proficient" };
+              const cefrDesc = CEFR_DESC[cefrLabel] || "";
+              const hasOverall = !!res;
+              return hasOverall ? (
+                <div className="p-4 rounded-xl border bg-white/80">
+                  <div className="font-semibold mb-2">Overall Result</div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">CEFR</span>
+                    <span className="inline-flex items-center gap-2 bg-black text-white rounded-full px-3 py-1 shadow-sm">
+                      <span className="font-semibold tracking-wide">{cefrLabel}</span>
+                      <span className="opacity-90">{cefrDesc}</span>
+                    </span>
+                  </div>
+                </div>
+              ) : null;
+            })()}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {uploaded.map((u, i) => {
                 const recId = u?.rekaman?.id;
                 const res = recId ? scoreResults[recId] : null;
-                const cefrLabel = res?.interpreted?.CEFR?.label || "-";
-                const topicSim = res?.features ? Math.round(Number(res.features["Topic Similarity (%)"]) || 0) : null;
-                const transcript = res?.transcript || u?.transcript || "";
+                const transcript = res?.transcript || "";
                 const shortTr = transcript.length > 140 ? transcript.slice(0, 140) + "…" : transcript;
                 return (
                   <div key={i} className="p-3 rounded border bg-white/60">
                     <div className="font-semibold">{u.tugas?.judul}</div>
                     <audio src={URL.createObjectURL(u.file)} controls className="w-full mt-2" />
-                    <div className="mt-2 text-sm">
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Status</span>
-                        <span className={scoreDone.includes(recId) ? "text-green-700" : "text-gray-600"}>
-                          {scoreDone.includes(recId) ? "Scored" : "Pending"}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">CEFR</span>
-                        <span className="font-medium">{cefrLabel}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-gray-600">Topic Similarity</span>
-                        <span className="font-medium">{topicSim !== null ? `${topicSim}%` : "-"}</span>
-                      </div>
-                    </div>
-                    {transcript ? (
+                    {/* Hide transcript for Task 6; optional for others */}
+                    {transcript && u?.stepIndex !== 6 ? (
                       <div className="mt-2 text-xs text-gray-700">
                         <div className="font-medium text-gray-800 mb-1">Transcript</div>
                         <div className="whitespace-pre-wrap">{shortTr}</div>
@@ -980,101 +666,82 @@ export default function AssessmentFlow() {
               })}
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={runScoring} disabled={scoring || scoreDone.length === uploaded.length} className="rounded-lg bg-green-600 hover:bg-green-700 transition text-white px-5 py-2.5 shadow">
-                {scoring ? "Computing..." : (scoreDone.length === 0 ? "Compute & Save Scores" : "Re-compute All")}
-              </button>
+              {(() => {
+                const task6 = uploaded.find((u) => u?.stepIndex === 6);
+                const rec6 = task6?.rekaman?.id;
+                const done6 = rec6 ? scoreDone.includes(rec6) : false;
+                if (done6 && !scoring) {
+                  return (
+                    <button onClick={() => { 
+                      // reset to start
+                      setScoreDone([]);
+                      setScoreResults({});
+                      setTaskProgress([]);
+                      pendingItemsRef.current = [];
+                      setUploaded([]);
+                      setMahasiswa(null);
+                      setStep(0);
+                    }} className="rounded-lg bg-black hover:bg-neutral-800 transition text-white px-5 py-2.5 shadow">Finish</button>
+                  );
+                }
+                return (
+                  <button onClick={runScoring} disabled={scoring || !task6} className="rounded-lg bg-black hover:bg-neutral-800 transition text-white px-5 py-2.5 shadow">
+                    {scoring ? "Processing..." : "Process"}
+                  </button>
+                );
+              })()}
             </div>
           </div>
         )}
       </div>
 
-      {/* Unsupported browser modal for Web Speech (hidden during mic test) */}
-      {step >= 1 && step <= 6 && !ws.supported && showNoSupportModal && !micTestOpen && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="max-w-md w-full rounded-2xl bg-white border border-gray-100 shadow-xl p-6">
-            <div className="text-lg font-semibold">Browser is not supported</div>
-            <div className="text-sm text-gray-700 mt-1">Browser is not supported, Results will be generated by Admin.</div>
-            <div className="mt-4 flex justify-end">
-              <button onClick={() => setShowNoSupportModal(false)} className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700">Got it</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* One-time mic test before Task 1 */}
-      {step === 1 && micTestOpen && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="max-w-lg w-full rounded-2xl bg-white border border-gray-100 shadow-xl p-6">
-            <div className="text-lg font-semibold">Microphone check</div>
-            <div className="text-sm text-gray-700 mt-1">Read the sentence below and make sure text appears:</div>
-            <div className="mt-2 p-3 bg-gray-50 rounded border text-sm font-medium">"Hello, good morning"</div>
-            <div className="mt-4">
-              <div className="text-xs text-gray-600 mb-1">Live transcript:</div>
-              <div className="min-h-[64px] whitespace-pre-wrap p-3 bg-white border rounded text-sm">
-                {ws.finalText || ws.interimText || (ws.supported ? "(No speech yet)" : "(Speech recognition is not supported in this browser)")}
-              </div>
-            </div>
-            {(ws.error || permissionError) && (
-              <div className="mt-3 text-xs text-red-700 bg-red-50 border border-red-100 rounded p-2">{ws.error || permissionError}</div>
-            )}
-            <div className="mt-5 flex justify-between">
-              <button type="button" className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300 text-gray-800" onClick={async ()=>{ try { await ws.stopAsync(); ws.reset(); await ws.beginFresh(); } catch(_){} }}>Retry</button>
-              <button type="button" className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white" onClick={async ()=>{
-                try {
-                  // Ensure recognition is running under this user gesture; beginFresh will start if needed
-                  if (!ws.listening) {
-                    await ws.beginFresh();
-                  }
-                } catch (_) {}
-                // Mark mic test done and close modal, then signal beginForTask so watch-dog and desired flag are set
-                setMicTestDone(true);
-                setMicTestOpen(false);
-                try { await ws.beginForTask(); } catch (_) {}
-              }}>OK, continue</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Compute overlay with per-task progress */}
+      {/* Process overlay with Whisper download & single overall progress */}
       {scoring && (
         <div className="fixed inset-0 z-50 bg-white/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white border border-gray-100 shadow-xl p-5">
-            <div className="text-lg font-semibold">Computing assessments</div>
-            <div className="text-sm text-gray-600 mt-1">This may take a moment, especially the first time.</div>
+            <div className="text-lg font-semibold">Processing</div>
+            <div className="text-sm text-gray-600 mt-1">Please wait, this may take around 5–10 minutes.</div>
+
+            {/* Whisper download progress (if still downloading) */}
+            {whisper?.downloading && (
+              <div className="mt-4">
+                <div className="flex items-center justify-between text-sm">
+                  <span>Downloading Whisper</span>
+                  <span>{Math.round(whisper.progress)}%</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded h-2 overflow-hidden">
+                  <div className="bg-black h-2" style={{ width: `${Math.round(whisper.progress)}%` }} />
+                </div>
+              </div>
+            )}
 
             {/* Current ASR/compute status */}
             <div className="mt-3 text-xs text-gray-600">
-              {currentIdx >= 0 && (
-                <span className="font-medium">Task {currentIdx + 1}/{uploaded.length}: </span>
-              )}
-              <span>{asrStatus || "Starting..."}</span>
+              <span>{asrStatus || (whisper?.loaded ? "Starting..." : whisper?.status)}</span>
               {lastStatusAt > 0 && Date.now() - lastStatusAt > 30000 && (
                 <span className="text-amber-600"> — still working… large model load or network, please wait</span>
               )}
             </div>
 
-            {/* Per-task indicators */}
-            <div className="mt-4 space-y-2 max-h-64 overflow-auto">
-              {(uploaded.length ? uploaded : new Array(6).fill(null)).map((u, i) => {
-                const title = u?.tugas?.judul ? u.tugas.judul : `Task ${i + 1}`;
-                const haveFile = !!u;
-                const val = taskProgress[i] ?? (haveFile ? 0 : 0);
+            {/* Single overall progress bar */}
+            <div className="mt-4">
+              {(() => {
+                const overall = Math.round(currentIdx >= 0 ? (taskProgress[currentIdx] || 0) : 0);
                 return (
-                  <div key={i} className="border rounded p-2 bg-white">
+                  <div>
                     <div className="flex items-center justify-between text-sm mb-1">
-                      <span className="truncate mr-2">{title}{!haveFile && " (not recorded)"}</span>
-                      <span>{Math.round(val || 0)}%</span>
+                      <span>Progress</span>
+                      <span>{overall}%</span>
                     </div>
                     <div className="w-full bg-gray-200 rounded h-2 overflow-hidden">
-                      <div className={`h-2 ${haveFile ? 'bg-blue-600' : 'bg-gray-300'}`} style={{ width: `${Math.round(val || 0)}%` }} />
+                      <div className="h-2 bg-black" style={{ width: `${overall}%` }} />
                     </div>
                   </div>
                 );
-              })}
+              })()}
             </div>
 
-            <div className="mt-4 text-xs text-gray-500">Tip: Keep this tab open while computation runs.</div>
+            <div className="mt-4 text-xs text-gray-500">Tip: Keep this tab open. You can navigate between pages; download continues in the background.</div>
           </div>
         </div>
       )}

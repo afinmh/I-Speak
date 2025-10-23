@@ -8,7 +8,6 @@ export default function AssessClient() {
     file,
     setFile,
     refTopic,
-    setRefTopic,
     transcript,
     setTranscript,
     model,
@@ -126,29 +125,31 @@ export default function AssessClient() {
           </div>
         </div>
 
-        {/* Transcript source & input */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-4">
-            <label className="text-sm font-medium text-gray-800">Transcript source:</label>
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input type="radio" name="tsrc" checked={model !== 'whisper'} onChange={() => setModel('skip')} />
-              <span>Manual</span>
-            </label>
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input type="radio" name="tsrc" checked={model === 'whisper'} onChange={() => setModel('whisper')} />
-              <span>Whisper (browser)</span>
-            </label>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-800 mb-1">Transcript</label>
-            <textarea
-              value={transcript}
-              onChange={(e) => setTranscript(e.target.value)}
-              placeholder={model === 'whisper' ? "Whisper will generate the transcript when you Process" : "Paste or type the transcript here..."}
-              className={`w-full border rounded-md p-2 min-h-28 ${model === 'whisper' ? 'bg-gray-50 text-gray-600' : ''}`}
-              disabled={model === 'whisper'}
-            />
-            <div className="text-xs text-gray-500 mt-1">Teks ini akan digunakan untuk semua metrik berbasis teks (accuracy, complexity, topic, coherence, dll).</div>
+        {/* Mode selection */}
+        <div className="flex items-center gap-4">
+          <div className="text-sm font-medium text-gray-800">Transcript source</div>
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input type="radio" name="mode" value="skip" checked={model === 'skip'} onChange={() => setModel('skip')} />
+            Manual/Provided
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input type="radio" name="mode" value="whisper" checked={model === 'whisper'} onChange={() => setModel('whisper')} />
+            Whisper (auto transcript only)
+          </label>
+        </div>
+
+        {/* Transcript input */}
+        <div>
+          <label className="block text-sm font-medium text-gray-800 mb-1">Transcript</label>
+          <textarea
+            value={transcript}
+            onChange={(e) => setTranscript(e.target.value)}
+            placeholder="Paste or type the transcript here..."
+            className={`w-full border rounded-md p-2 min-h-28 ${model==='whisper' ? 'bg-gray-100' : ''}`}
+            disabled={model === 'whisper'}
+          />
+          <div className="text-xs text-gray-500 mt-1">
+            {model === 'whisper' ? 'Whisper akan menghasilkan transcript. Anda tidak perlu mengisi kotak ini.' : 'Teks ini akan digunakan untuk semua metrik berbasis teks (accuracy, complexity, topic, coherence, dll).'}
           </div>
         </div>
 
@@ -167,9 +168,9 @@ export default function AssessClient() {
             disabled={!file || (model !== 'whisper' && !(transcript && transcript.trim().length > 0))}
             className="px-4 py-2 rounded-md bg-black text-white disabled:opacity-50"
           >
-            {model === 'whisper' ? 'Process (auto-transcribe)' : 'Process Audio'}
+            Process Audio
           </button>
-          {model !== 'whisper' && !transcript?.trim() && (
+          {!transcript?.trim() && model !== 'whisper' && (
             <span className="text-xs text-red-600">Transcript diperlukan untuk menghitung metrik berbasis teks.</span>
           )}
           {result && status === "Done" && (

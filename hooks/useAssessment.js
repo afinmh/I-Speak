@@ -565,7 +565,7 @@ export default function useAssessment() {
   const [refTopic, setRefTopic] = useState("Discuss the course you enjoyed most at university, describe a course you found challenging, and explain whether you think universities should focus more on practical skills or theoretical knowledge.");
   // External transcript provided by user (Web Speech or manual)
   const [transcript, setTranscript] = useState("");
-  // Model selection not used when skipping Whisper
+  // Mode: "skip" uses provided transcript; "whisper" uses Whisper to generate transcript only
   const [model, setModel] = useState("skip");
   const [status, setStatus] = useState("");
   const [result, setResult] = useState(null);
@@ -579,50 +579,16 @@ export default function useAssessment() {
 
   const run = useCallback(async () => {
     if (!file) return;
-    // Prepare transcript: if manual mode (skip), require text; if whisper mode, transcribe from file
-    let workingTranscript = (transcript || "").trim();
-    if (!workingTranscript) {
-      if (model === "whisper") {
-        try {
-          setStatus("Downloading Whisper model...");
-          const asr = await transcribeWhisperWebFromFile(file, {
-            model: "tiny.en",
-            onDownloadProgress: (evt) => {
-              try {
-                const p = typeof evt === 'number' ? evt : (evt?.progress ?? 0);
-                setStatus(`Whisper download ${Math.round((p||0)*100)}%`);
-              } catch (_) {}
-            },
-            onProgress: (evt) => {
-              try {
-                const p = typeof evt === 'number' ? evt : (evt?.progress ?? 0);
-                setStatus(`Transcribing ${Math.round((p||0)*100)}%`);
-              } catch (_) {}
-            },
-            returnSegments: true
-          });
-          if (asr && typeof asr === 'object' && asr.text) {
-            workingTranscript = String(asr.text || "").trim();
-          } else if (typeof asr === 'string') {
-            workingTranscript = asr.trim();
-          }
-          setTranscript(workingTranscript);
-        } catch (e) {
-          setErrors((prev) => ({ ...prev, asr: e?.message || String(e) }));
-          setStatus("Whisper transcription failed");
-          return;
-        }
-      } else {
-        setErrors((prev) => ({ ...prev, transcript: "Transcript is required when Whisper is disabled." }));
-        setStatus("Transcript required");
-        return;
-      }
+    if (model !== "whisper" && (!transcript || transcript.trim().length === 0)) {
+      setErrors((prev) => ({ ...prev, transcript: "Transcript is required when Whisper is disabled." }));
+      setStatus("Transcript required");
+      return;
     }
     setResult(null);
     setErrors({});
     setStatus("Decoding audio...");
   try { console.time("[useAssessment] run"); console.log("[useAssessment] start", { model, fileName: file?.name }); } catch (_) {}
-    const buffer = await decodeFileToAudioBuffer(file);
+  const buffer = await decodeFileToAudioBuffer(file);
     const duration = buffer.duration;
     const channelData = buffer.getChannelData(0);
   try { console.timeLog("[useAssessment] run", "decoded", { duration, sampleRate: buffer.sampleRate }); } catch (_) {}
@@ -640,10 +606,21 @@ export default function useAssessment() {
   const longPauseSec = computeLongPauseDuration(energies, buffer.sampleRate, hop, 0.01, 300);
   try { console.timeLog("[useAssessment] run", "basic features"); } catch (_) {}
 
-    // Use transcript (manual or Whisper). If Whisper was used with returnSegments, we could pass segments, but for now build from energy.
-    let segments = null; // optional ASR segments (not used unless wired in)
+    // Transcript source: Whisper or provided text
+    let segments = null; // we won't use for features
+    let transcriptUsed = (transcript || "").trim();
+    if (model === "whisper") {
+      setStatus("Transcribing with Whisper (text only)...");
+      try {
+        const res = await transcribeWhisperWebFromFile(file, { model: "tiny.en", returnSegments: false });
+        if (typeof res === "string") transcriptUsed = res;
+        else if (res && res.text) transcriptUsed = res.text;
+      } catch (e) {
+        setErrors((prev) => ({ ...prev, asr: e?.message || String(e) }));
+      }
+    }
 
-  const tokens = tokenize(workingTranscript || "");
+  const tokens = tokenize(transcriptUsed || "");
     const totalWords = tokens.length;
     // Articulation/MLR: build segment boundaries from Whisper or energy fallback
     let segmentBoundaries = [];
@@ -681,11 +658,11 @@ export default function useAssessment() {
     const wpm = wps * 60;
     const typeCount = new Set(tokens).size;
     const ttr = totalWords > 0 ? typeCount / totalWords : 0;
-  const { linking_count, discourse_count, filled_count } = countLinkingDiscourseFilled(workingTranscript);
+  const { linking_count, discourse_count, filled_count } = countLinkingDiscourseFilled(transcriptUsed);
 
   setStatus("Embedding for coherence...");
   try { console.timeLog("[useAssessment] run", "embedding start"); } catch (_) {}
-  const coherencePct = await computeSemanticCoherence(workingTranscript);
+  const coherencePct = await computeSemanticCoherence(transcriptUsed);
   try { console.timeLog("[useAssessment] run", "embedding done"); } catch (_) {}
 
     // MFCC vs TTS cosine (optional)
@@ -693,7 +670,7 @@ export default function useAssessment() {
   try { console.timeLog("[useAssessment] run", "tts compare start"); } catch (_) {}
     let mfccCosine = null;
     // Compute MFCC frame matrices for both user audio and TTS, trimming to common min duration (like Python)
-  const ttsFrames = await mfccFramesFromTTS(workingTranscript);
+  const ttsFrames = await mfccFramesFromTTS(transcriptUsed);
     if (ttsFrames) {
       const minDur = Math.max(0, Math.min(buffer.duration, ttsFrames.durationSec || 0));
       const userMFCC = computeMFCCMatrix(channelData, buffer.sampleRate, 2048, 1024, 13, minDur);
@@ -769,7 +746,7 @@ export default function useAssessment() {
   features["Long Pause (s)"] = longPauseSec;
     features["Topic Similarity (%)"] = 0;
     // Grammar errors heuristic
-    features["Grammar Errors"] = computeGrammarErrors(transcript);
+  features["Grammar Errors"] = computeGrammarErrors(transcriptUsed);
     features["Idioms Found"] = 0;
     features["CEFR A1"] = 0;
     features["CEFR A2"] = 0;
@@ -795,7 +772,7 @@ export default function useAssessment() {
       fetch("/api/data/idioms", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: workingTranscript })
+        body: JSON.stringify({ text: transcriptUsed })
       }).then((r) => r.ok ? r.json() : r.json().catch(() => ({})).then((j)=> Promise.reject(new Error(j?.message||"idioms api failed"))) )
        .catch((e) => { apiErrors.idioms = e?.message || String(e); return { count: 0, idioms: [] }; })
     );
@@ -803,7 +780,7 @@ export default function useAssessment() {
       fetch("/api/data/cefr", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: workingTranscript })
+        body: JSON.stringify({ text: transcriptUsed })
       }).then((r) => r.ok ? r.json() : r.json().catch(() => ({})).then((j)=> Promise.reject(new Error(j?.message||"cefr api failed"))) )
        .catch((e) => { apiErrors.cefr = e?.message || String(e); return { distribution: {}, wordLevels: {} }; })
     );
@@ -811,7 +788,7 @@ export default function useAssessment() {
       fetch("/api/data/bundles", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: workingTranscript })
+        body: JSON.stringify({ text: transcriptUsed })
       }).then((r) => r.ok ? r.json() : r.json().catch(() => ({})).then((j)=> Promise.reject(new Error(j?.message||"bundles api failed"))) )
        .catch((e) => { apiErrors.bundles = e?.message || String(e); return { bigram_count: 0, trigram_count: 0, fourgram_count: 0, bigram_matches: [], trigram_matches: [], fourgram_matches: [] }; })
     );
@@ -820,7 +797,7 @@ export default function useAssessment() {
         fetch("/api/data/topic-similarity", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text: workingTranscript, reference: refTopic })
+        body: JSON.stringify({ text: transcriptUsed, reference: refTopic })
         }).then((r) => r.ok ? r.json() : r.json().catch(() => ({})).then((j)=> Promise.reject(new Error(j?.message||"topic-sim api failed"))) )
          .catch((e) => { apiErrors.topicSim = e?.message || String(e); return { similarityPercent: 0 }; })
       );
@@ -887,7 +864,7 @@ export default function useAssessment() {
     };
 
   setResult({
-      transcript: workingTranscript,
+  transcript: transcriptUsed,
       features,
       outputs: { flu, pro, proso, coh, topic, comp, acc, cefr },
       interpreted,

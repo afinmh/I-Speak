@@ -58,16 +58,18 @@ export default function AuthGate({ children }) {
             <div className="text-sm text-gray-600">Sign in to access the dashboard</div>
           </div>
           {error && <div className="mb-3 p-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded">{error}</div>}
-          <form onSubmit={mode === "signin" ? handleSignIn : handleSignUp} className="space-y-3">
+          <form onSubmit={mode === "signin" ? handleSignIn : handleSignUp} className="space-y-4">
             <div>
               <label className="block text-sm">Email</label>
-              <input type="email" value={email} onChange={(e)=>setEmail(e.target.value)} className="mt-1 w-full border rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-200" required />
+              <input type="email" value={email} onChange={(e)=>setEmail(e.target.value)} className="mt-1 w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-black/20" placeholder="you@institution.edu" required />
             </div>
             <div>
               <label className="block text-sm">Password</label>
-              <input type="password" value={password} onChange={(e)=>setPassword(e.target.value)} className="mt-1 w-full border rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-200" required />
+              <input type="password" value={password} onChange={(e)=>setPassword(e.target.value)} className="mt-1 w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-black/20" placeholder="Your password" required />
             </div>
-            <button className="w-full rounded-lg bg-blue-600 text-white py-2 hover:bg-blue-700 transition">{mode === "signin" ? "Sign in" : "Create account"}</button>
+            <button className="w-full rounded-lg bg-black text-white py-3 hover:bg-neutral-800 transition">
+              {mode === "signin" ? "Sign in" : "Create account"}
+            </button>
           </form>
         </div>
       </div>

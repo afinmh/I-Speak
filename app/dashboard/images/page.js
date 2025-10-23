@@ -71,7 +71,9 @@ function ImagesContent() {
     <div className="max-w-5xl mx-auto p-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Images Admin</h1>
-        <Link href="/dashboard" className="text-sm text-blue-600 hover:underline">← Back to Dashboard</Link>
+        <Link href="/dashboard" className="text-sm inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border shadow-sm hover:bg-gray-50 text-black">
+          ← Back
+        </Link>
       </div>
 
       <form onSubmit={onSubmit} className="mt-4 p-4 border rounded-xl bg-white space-y-3">
@@ -83,7 +85,9 @@ function ImagesContent() {
           <label className="block text-sm">Image File (required)</label>
           <input type="file" accept="image/*" onChange={(e)=>setFile(e.target.files?.[0] || null)} className="mt-1" required />
         </div>
-        <button disabled={loading} className="rounded bg-blue-600 text-white px-4 py-2 hover:bg-blue-700">{loading ? "Uploading..." : "Upload"}</button>
+        <button disabled={loading} className="rounded bg-black text-white px-4 py-2 hover:bg-neutral-800 shadow">
+          {loading ? "Uploading..." : "Upload"}
+        </button>
         {error && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">{error}</div>}
       </form>
 

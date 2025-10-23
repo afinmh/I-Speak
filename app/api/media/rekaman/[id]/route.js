@@ -29,10 +29,9 @@ function extractStoragePath(urlOrPath) {
   return null;
 }
 
-export async function GET(req, ctx) {
+export async function GET(req, { params }) {
   try {
-    const p = await ctx?.params;
-    const id = Number(p?.id);
+    const id = Number(params?.id);
     if (!id) return new Response("Bad Request", { status: 400 });
 
     const supa = getServiceClient();

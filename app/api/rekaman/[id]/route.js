@@ -1,23 +1,27 @@
-import { NextResponse } from "next/server";
+import { json, error } from "../../_utils/respond";
 import { getServiceClient } from "@/lib/supabaseServer";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function PATCH(req, { params }) {
   try {
-    const { id } = params || {};
+    const id = Number(params?.id);
+    if (!id) return error("Invalid rekaman id", 400);
     const body = await req.json().catch(() => ({}));
-    const transkrip = typeof body?.transkrip === 'string' ? body.transkrip : null;
-    if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
-    if (transkrip === null) return NextResponse.json({ error: "Missing transkrip" }, { status: 400 });
-  const supabase = getServiceClient();
-    const { data, error } = await supabase
-      .from('rekaman_mahasiswa')
+    const transkrip = (body?.transkrip || body?.transcript || "").trim();
+    if (!transkrip) return error("Body.wajib: transkrip", 400);
+
+    const supa = getServiceClient();
+    const { data, error: dberr } = await supa
+      .from("rekaman_mahasiswa")
       .update({ transkrip })
-      .eq('id', id)
-      .select('*')
+      .eq("id", id)
+      .select("*")
       .single();
-    if (error) throw error;
-    return NextResponse.json({ rekaman: data });
+    if (dberr) return error(dberr.message, 500);
+    return json({ ok: true, rekaman: data });
   } catch (e) {
-    return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
+    return error(e?.message || "Failed to update transcript", 500);
   }
 }

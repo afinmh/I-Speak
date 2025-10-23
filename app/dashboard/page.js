@@ -72,7 +72,7 @@ function DashboardContent() {
         </div>
 
         <div className="mt-4 flex items-center gap-2">
-          <input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Search name, program, city…" className="w-full sm:w-80 border rounded-lg p-2 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-200" />
+          <input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Search name, program, city…" className="w-full sm:w-80 border rounded-lg p-2 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-black/20" />
           <div className="text-xs text-gray-500">{filtered.length} result(s)</div>
         </div>
       {error && <div className="mt-3 p-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded">{error}</div>}
@@ -83,13 +83,13 @@ function DashboardContent() {
           {filtered.map((m) => (
             <Link key={m.id} href={`/dashboard/${m.id}`} className="group block border rounded-2xl p-4 bg-white hover:shadow-md transition">
               <div className="flex items-center gap-3">
-                <div className="flex-none w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center font-semibold shadow-sm">
+                <div className="flex-none w-10 h-10 rounded-full bg-black text-white flex items-center justify-center font-semibold shadow-sm">
                   {String(m.nama || "?").charAt(0).toUpperCase()}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="truncate text-lg font-semibold group-hover:text-blue-600">{m.nama}</div>
-                    <span className="flex-none inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                    <div className="truncate text-lg font-semibold group-hover:text-black">{m.nama}</div>
+                    <span className="flex-none inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-black/5 text-black border border-black/20">
                       {m.rekaman_count ?? 0} rec
                     </span>
                   </div>
