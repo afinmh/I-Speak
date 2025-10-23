@@ -120,8 +120,23 @@ function useWebSpeech() {
         }
         return words.join(' ');
       };
-      let finalsClean = dedupConsecutive(finals);
-      let interimClean = dedupConsecutive(interim);
+      const removeRepeatedBigrams = (s) => {
+        const words = s.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+        const out = [];
+        let i = 0;
+        while (i < words.length) {
+          if (out.length >= 2 && i + 1 < words.length) {
+            const last2 = [out[out.length - 2], out[out.length - 1]].map((w) => w.toLowerCase()).join(' ');
+            const pair = [words[i], words[i + 1]].map((w) => w.toLowerCase()).join(' ');
+            if (last2 === pair) { i += 2; continue; }
+          }
+          out.push(words[i]);
+          i += 1;
+        }
+        return out.join(' ');
+      };
+      let finalsClean = removeRepeatedBigrams(dedupConsecutive(finals));
+      let interimClean = removeRepeatedBigrams(dedupConsecutive(interim));
       finalsClean = collapseTailRepeats(finalsClean);
       interimClean = collapseTailRepeats(interimClean);
       // Avoid regressing final text; only update when it actually changes
@@ -216,8 +231,11 @@ function useWebSpeech() {
         lastResultAtRef.current = Date.now();
       }
     }, 3000);
-    await beginFresh();
-  }, [beginFresh]);
+    // If already listening (e.g., continued from mic test), do not restart; just mark desired
+    if (!listening) {
+      await beginFresh();
+    }
+  }, [beginFresh, listening]);
   const endForTask = useCallback(async () => {
     desiredRef.current = false;
     if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
@@ -417,7 +435,11 @@ export default function AssessmentFlow() {
         setTimeout(() => {
           // Start Web Speech recognition alongside recording (best-effort), ensuring fresh start per task
           (async () => {
-            try { ws.reset(); await ws.beginForTask(); } catch (_) {}
+            try {
+              // Clear UI text but keep mic session if it's already running from mic test
+              ws.reset();
+              await ws.beginForTask();
+            } catch (_) {}
           })();
           start();
           const recEndAt = Date.now() + rec * 1000;
