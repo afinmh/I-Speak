@@ -103,42 +103,37 @@ function useWebSpeech() {
         .split(' ')
         .filter((w, i, a) => i === 0 || w.toLowerCase() !== a[i-1].toLowerCase())
         .join(' ');
-      const collapseTailRepeats = (s) => {
+      // Remove immediate repeated sequences up to maxSeq words (collapse duplicates)
+      const collapseRepeatedSequences = (s, maxSeq = 4) => {
+        if (!s) return '';
         const words = s.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
-        let n = words.length;
-        // collapse repeated trailing phrases, prefer longer matches first
-        for (let k = Math.floor(n/2); k >= 2; k--) {
-          const a = words.slice(n - k);
-          const b = words.slice(n - 2*k, n - k);
-          if (a.length === b.length && a.length >= 2 && a.join(' ').toLowerCase() === b.join(' ').toLowerCase()) {
-            // remove one repeated tail
-            words.splice(n - k, k);
-            n = words.length;
-            // restart search from new n
-            k = Math.floor(n/2) + 1;
+        let i = 0;
+        while (i < words.length) {
+          let removed = false;
+          // try longest sequence first
+          for (let k = Math.min(maxSeq, Math.floor((words.length - i) / 2)); k >= 1; k--) {
+            const aStart = i;
+            const aEnd = i + k; // exclusive
+            const bStart = i + k;
+            const bEnd = i + 2 * k;
+            if (bEnd > words.length) continue;
+            let match = true;
+            for (let t = 0; t < k; t++) {
+              if (words[aStart + t].toLowerCase() !== words[bStart + t].toLowerCase()) { match = false; break; }
+            }
+            if (match) {
+              // remove the second duplicate block
+              words.splice(bStart, k);
+              removed = true;
+              break;
+            }
           }
+          if (!removed) i += 1;
         }
         return words.join(' ');
       };
-      const removeRepeatedBigrams = (s) => {
-        const words = s.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
-        const out = [];
-        let i = 0;
-        while (i < words.length) {
-          if (out.length >= 2 && i + 1 < words.length) {
-            const last2 = [out[out.length - 2], out[out.length - 1]].map((w) => w.toLowerCase()).join(' ');
-            const pair = [words[i], words[i + 1]].map((w) => w.toLowerCase()).join(' ');
-            if (last2 === pair) { i += 2; continue; }
-          }
-          out.push(words[i]);
-          i += 1;
-        }
-        return out.join(' ');
-      };
-      let finalsClean = removeRepeatedBigrams(dedupConsecutive(finals));
-      let interimClean = removeRepeatedBigrams(dedupConsecutive(interim));
-      finalsClean = collapseTailRepeats(finalsClean);
-      interimClean = collapseTailRepeats(interimClean);
+      let finalsClean = collapseRepeatedSequences(dedupConsecutive(finals), 4);
+      let interimClean = collapseRepeatedSequences(dedupConsecutive(interim), 4);
       // Avoid regressing final text; only update when it actually changes
       if (finalsClean !== lastFinalRef.current) {
         lastFinalRef.current = finalsClean;
@@ -150,34 +145,48 @@ function useWebSpeech() {
     rec.onerror = (e) => {
       const err = e?.error || String(e);
       setError(err);
-      // Auto-retry on transient network errors a couple of times
-      if ((err === 'network' || err === 'no-speech') && retryRef.current < maxRetries && desiredRef.current) {
+      // If desired, quickly attempt a gentle restart to avoid going to false listening
+      if (desiredRef.current && retryRef.current < maxRetries) {
         retryRef.current += 1;
         try { rec.stop(); } catch (_) {}
-        setTimeout(() => { try { rec.start(); } catch (_) {} }, 800 * retryRef.current);
+        // preemptively show listening to avoid UI flicker
+        setListening(true);
+        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = setTimeout(() => {
+          try { rec.start(); } catch (_) { setListening(false); }
+        }, 120 * retryRef.current);
+      } else {
+        // otherwise show not listening
+        setListening(false);
       }
     };
     rec.onend = () => {
-      setListening(false);
       // If stopAsync is awaiting, resolve and skip auto-restart
       if (typeof endResolveRef.current === 'function') {
         try { endResolveRef.current(); } catch (_) {}
         endResolveRef.current = null;
+        setListening(false);
         return;
       }
-      // Auto-restart on natural end if still desired (e.g., after long pauses)
+      // Auto-restart quickly when still desired to minimize missed speech
       if (desiredRef.current) {
         const now = Date.now();
         const since = now - (lastRestartAtRef.current || 0);
-        // rate limit restarts
-        if (restartCountRef.current < 10 && since > 150) {
+        if (restartCountRef.current < 50 && since > 50) {
           lastRestartAtRef.current = now;
           restartCountRef.current += 1;
           if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+          const delay = isIOSRef.current ? 120 : 60;
+          // mark listening true preemptively to avoid UI flipping to false during tiny gap
+          setListening(true);
           restartTimerRef.current = setTimeout(() => {
-            try { rec.start(); } catch (_) {}
-          }, isIOSRef.current ? 400 : 200);
+            try { rec.start(); } catch (e) { setListening(false); }
+          }, delay);
+        } else {
+          setListening(false);
         }
+      } else {
+        setListening(false);
       }
     };
     recRef.current = rec;
