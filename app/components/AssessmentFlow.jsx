@@ -500,11 +500,15 @@ export default function AssessmentFlow() {
   useEffect(() => {
     // Only clean up when the step actually changes (avoid firing on mic-test state changes)
     if (prevStepRef.current !== step) {
-      try { ws.endForTask(); ws.reset(); } catch (_) {}
+      // If we've just entered step 1 and the mic test is open or not yet completed,
+      // skip cleanup to avoid stopping the recognition that was started by the user gesture.
+      if (!(step === 1 && !micTestDone)) {
+        try { ws.endForTask(); ws.reset(); } catch (_) {}
+      }
       prevStepRef.current = step;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+  }, [step, micTestDone]);
 
   // When recording stops and we have chunks, upload to /api/rekaman (only once)
   useEffect(() => {
@@ -934,8 +938,19 @@ export default function AssessmentFlow() {
               <div className="mt-3 text-xs text-red-700 bg-red-50 border border-red-100 rounded p-2">{ws.error || permissionError}</div>
             )}
             <div className="mt-5 flex justify-between">
-              <button type="button" className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300 text-gray-800" onClick={async ()=>{ try { const t = Promise.race([ws.stopAsync(), new Promise(r=>setTimeout(r,1200))]); await t; ws.reset(); await ws.beginFresh(); } catch(_){} }}>Retry</button>
-              <button type="button" className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white" onClick={async ()=>{ try { const t = Promise.race([ws.stopAsync(), new Promise(r=>setTimeout(r,1200))]); await t; ws.reset(); } catch(_){} setMicTestDone(true); setMicTestOpen(false); try { await ws.beginFresh(); } catch(_){} }}>OK, continue</button>
+              <button type="button" className="px-4 py-2 rounded bg-gray-200 hover:bg-gray-300 text-gray-800" onClick={async ()=>{ try { await ws.stopAsync(); ws.reset(); await ws.beginFresh(); } catch(_){} }}>Retry</button>
+              <button type="button" className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white" onClick={async ()=>{
+                try {
+                  // Ensure recognition is running under this user gesture; beginFresh will start if needed
+                  if (!ws.listening) {
+                    await ws.beginFresh();
+                  }
+                } catch (_) {}
+                // Mark mic test done and close modal, then signal beginForTask so watch-dog and desired flag are set
+                setMicTestDone(true);
+                setMicTestOpen(false);
+                try { await ws.beginForTask(); } catch (_) {}
+              }}>OK, continue</button>
             </div>
           </div>
         </div>
