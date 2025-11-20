@@ -79,6 +79,8 @@ function DetailContent() {
   const [processing, setProcessing] = useState(false);
   const [overall, setOverall] = useState(null); // {cefr, subscores}
   const [downloadingAll, setDownloadingAll] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadTotal, setDownloadTotal] = useState(0);
 
   async function processTask6() {
     if (!recTask6) return;
@@ -135,21 +137,42 @@ function DetailContent() {
     if (!recs.length || downloadingAll) return;
     try {
       setDownloadingAll(true);
+      setDownloadProgress(0);
+      setDownloadTotal(recs.length);
       let JSZip = null;
       try { JSZip = (await import("jszip")).default; } catch (_) {}
       const nameBase = sanitizeName(m?.nama);
       const ordered = recs.slice().sort((a,b)=>Number(a.tugas_id)-Number(b.tugas_id));
       if (JSZip) {
         const zip = new JSZip();
-        for (const r of ordered) {
-          const resp = await fetch(`/api/media/rekaman/${r.id}`);
-          if (!resp.ok) continue;
-          const buf = await resp.arrayBuffer();
-          const ext = extFromContentType(resp.headers.get("content-type"));
-          const idx = Number(r.tugas_id) || 0;
-          const fname = `${nameBase}_test${idx}${ext}`;
-          zip.file(fname, buf);
+        const concurrency = Math.min(5, ordered.length);
+        let completed = 0;
+        let lastUiUpdate = 0;
+        let nextIndex = 0;
+        async function worker() {
+          while (true) {
+            const idx = nextIndex++;
+            if (idx >= ordered.length) break;
+            const r = ordered[idx];
+            try {
+              const resp = await fetch(`/api/media/rekaman/${r.id}`);
+              if (resp.ok) {
+                const buf = await resp.arrayBuffer();
+                const ext = extFromContentType(resp.headers.get("content-type"));
+                const tIdx = Number(r.tugas_id) || 0;
+                const fname = `${nameBase}_test${tIdx}${ext}`;
+                zip.file(fname, buf, { compression: "STORE" });
+              }
+            } catch(_) {}
+            completed++;
+            const now = performance.now();
+            if (now - lastUiUpdate > 100 || completed === ordered.length) {
+              lastUiUpdate = now;
+              setDownloadProgress(completed);
+            }
+          }
         }
+        await Promise.all(Array.from({length: concurrency}, ()=>worker()));
         const blob = await zip.generateAsync({ type: "blob" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -162,20 +185,21 @@ function DetailContent() {
       } else {
         for (const r of ordered) {
           const resp = await fetch(`/api/media/rekaman/${r.id}`);
-            if (!resp.ok) continue;
-            const blob = await resp.blob();
-            const ext = extFromContentType(resp.headers.get("content-type"));
-            const idx = Number(r.tugas_id) || 0;
-            const fname = `${nameBase}_test${idx}${ext}`;
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = fname;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            await new Promise((res)=>setTimeout(res,150));
+          if (!resp.ok) continue;
+          const blob = await resp.blob();
+          const ext = extFromContentType(resp.headers.get("content-type"));
+          const idx = Number(r.tugas_id) || 0;
+          const fname = `${nameBase}_test${idx}${ext}`;
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = fname;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          setDownloadProgress(idx + 1);
+          await new Promise((res)=>setTimeout(res,150));
         }
       }
     } catch (e) {
@@ -183,6 +207,7 @@ function DetailContent() {
       alert(e?.message || "Failed to download audios");
     } finally {
       setDownloadingAll(false);
+      setTimeout(()=>{ setDownloadProgress(0); setDownloadTotal(0); }, 400);
     }
   }
 
@@ -207,7 +232,7 @@ function DetailContent() {
               ) : (
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v11" /><path d="m6 11 6 6 6-6" /><path d="M4 19h16" /></svg>
               )}
-              {downloadingAll?"Downloading…":"Download Audios"}
+              {downloadingAll?`Downloading…${downloadTotal?` (${downloadProgress}/${downloadTotal})`:""}`:"Download Audios"}
             </button>
           </div>
         </div>

@@ -19,6 +19,8 @@ function DashboardContent() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [downloadingId, setDownloadingId] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadTotal, setDownloadTotal] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -95,21 +97,47 @@ function DashboardContent() {
         setDownloadingId(null);
         return;
       }
+      setDownloadTotal(recs.length);
+      setDownloadProgress(0);
       const nameBase = sanitizeName(m.nama);
       // Try to zip using jszip; fallback to individual downloads if not available
       let JSZip = null;
       try { JSZip = (await import("jszip")).default; } catch (_) {}
       if (JSZip) {
         const zip = new JSZip();
-        for (const r of recs) {
-          const resp = await fetch(`/api/media/rekaman/${r.id}`);
-          if (!resp.ok) continue;
-          const buf = await resp.arrayBuffer();
-          const ext = extFromContentType(resp.headers.get("content-type"));
-          const idx = Number(r.tugas_id) || 0;
-          const fname = `${nameBase}_test${idx}${ext}`;
-          zip.file(fname, buf);
+        // Concurrent fetch with worker pool
+        const concurrency = Math.min(5, recs.length);
+        let completed = 0;
+        let lastUiUpdate = 0;
+        async function worker(startIndex) {
+          while (true) {
+            const idx = nextIndex++;
+            if (idx >= recs.length) break;
+            const r = recs[idx];
+            try {
+              const resp = await fetch(`/api/media/rekaman/${r.id}`);
+              if (resp.ok) {
+                const buf = await resp.arrayBuffer();
+                const ext = extFromContentType(resp.headers.get("content-type"));
+                const tIdx = Number(r.tugas_id) || 0;
+                const fname = `${nameBase}_test${tIdx}${ext}`;
+                // Use STORE (no compression) for speed; audio already compressed
+                zip.file(fname, buf, { compression: "STORE" });
+              }
+            } catch (_) {}
+            completed++;
+            // Throttle UI updates to every 100ms or on completion
+            const now = performance.now();
+            if (now - lastUiUpdate > 100 || completed === recs.length) {
+              lastUiUpdate = now;
+              setDownloadProgress(completed);
+            }
+          }
         }
+        let nextIndex = 0;
+        const workers = [];
+        for (let i = 0; i < concurrency; i++) workers.push(worker(i));
+        await Promise.all(workers);
         const blob = await zip.generateAsync({ type: "blob" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -136,14 +164,17 @@ function DashboardContent() {
           a.click();
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
+          setDownloadProgress(idx + 1);
           await new Promise((res) => setTimeout(res, 150));
         }
       }
       setDownloadingId(null);
+      setTimeout(()=>{ setDownloadProgress(0); setDownloadTotal(0); }, 300);
     } catch (err) {
       console.error(err);
       alert(err?.message || "Failed to download audios");
       setDownloadingId(null);
+      setDownloadProgress(0); setDownloadTotal(0);
     }
   }
 
@@ -194,7 +225,7 @@ function DashboardContent() {
                         ) : (
                           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v11" /><path d="m6 11 6 6 6-6" /><path d="M4 19h16" /></svg>
                         )}
-                        {downloadingId===m.id?"Downloading…":"Download"}
+                        {downloadingId===m.id?`Downloading…${downloadTotal?` (${downloadProgress}/${downloadTotal})`:""}`:"Download"}
                       </button>
                     </div>
                   </div>
