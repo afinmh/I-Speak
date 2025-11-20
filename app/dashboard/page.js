@@ -18,6 +18,7 @@ function DashboardContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const [downloadingId, setDownloadingId] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -57,6 +58,95 @@ function DashboardContent() {
     );
   }, [items, query]);
 
+  async function fetchStudentDetail(id) {
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
+    const res = await fetch(`/api/dashboard/mahasiswa/${id}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+    if (!res.ok) throw new Error("Failed to load student detail");
+    return await res.json();
+  }
+
+  function sanitizeName(name) {
+    const base = String(name || "student").normalize("NFKD").replace(/[^\w\s-]+/g, "").trim();
+    return base.replace(/\s+/g, "_");
+  }
+
+  function extFromContentType(ct) {
+    const c = String(ct || "").toLowerCase();
+    if (c.includes("audio/mpeg")) return ".mp3";
+    if (c.includes("audio/wav")) return ".wav";
+    if (c.includes("audio/ogg")) return ".ogg";
+    if (c.includes("audio/mp4")) return ".m4a";
+    if (c.includes("audio/webm")) return ".webm";
+    return ".webm";
+  }
+
+  async function downloadAudiosForStudent(e, m) {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      setDownloadingId(m.id);
+      const detail = await fetchStudentDetail(m.id);
+      const recs = (detail?.rekaman || []).slice().sort((a,b)=>Number(a.tugas_id)-Number(b.tugas_id));
+      if (!recs.length) {
+        alert("No recordings found for this student.");
+        setDownloadingId(null);
+        return;
+      }
+      const nameBase = sanitizeName(m.nama);
+      // Try to zip using jszip; fallback to individual downloads if not available
+      let JSZip = null;
+      try { JSZip = (await import("jszip")).default; } catch (_) {}
+      if (JSZip) {
+        const zip = new JSZip();
+        for (const r of recs) {
+          const resp = await fetch(`/api/media/rekaman/${r.id}`);
+          if (!resp.ok) continue;
+          const buf = await resp.arrayBuffer();
+          const ext = extFromContentType(resp.headers.get("content-type"));
+          const idx = Number(r.tugas_id) || 0;
+          const fname = `${nameBase}_test${idx}${ext}`;
+          zip.file(fname, buf);
+        }
+        const blob = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${nameBase}_audios.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else {
+        // Fallback: download individually (may be blocked by some browsers)
+        for (const r of recs) {
+          const resp = await fetch(`/api/media/rekaman/${r.id}`);
+          if (!resp.ok) continue;
+          const blob = await resp.blob();
+          const ext = extFromContentType(resp.headers.get("content-type"));
+          const idx = Number(r.tugas_id) || 0;
+          const fname = `${nameBase}_test${idx}${ext}`;
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = fname;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          await new Promise((res) => setTimeout(res, 150));
+        }
+      }
+      setDownloadingId(null);
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || "Failed to download audios");
+      setDownloadingId(null);
+    }
+  }
+
   return (
     <div className="min-h-[80vh] bg-gradient-to-b from-gray-50 to-white">
       <div className="max-w-6xl mx-auto px-4 py-5">
@@ -89,9 +179,24 @@ function DashboardContent() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <div className="truncate text-lg font-semibold group-hover:text-black">{m.nama}</div>
-                    <span className="flex-none inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-black/5 text-black border border-black/20">
-                      {m.rekaman_count ?? 0} rec
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="flex-none inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-black/5 text-black border border-black/20">
+                        {m.rekaman_count ?? 0} rec
+                      </span>
+                      <button
+                        onClick={(e)=>downloadAudiosForStudent(e, m)}
+                        disabled={downloadingId === m.id}
+                        className={`text-xs px-2 py-1 rounded flex items-center gap-1 shadow border border-black/30 bg-gradient-to-r from-black to-gray-700 text-white hover:from-gray-900 hover:to-black transition ${downloadingId===m.id?"opacity-60 cursor-not-allowed":""}`}
+                        title="Download all audios as ZIP"
+                      >
+                        {downloadingId===m.id ? (
+                          <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" strokeOpacity="0.25" /><path d="M12 2a10 10 0 0 1 10 10" /></svg>
+                        ) : (
+                          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v11" /><path d="m6 11 6 6 6-6" /><path d="M4 19h16" /></svg>
+                        )}
+                        {downloadingId===m.id?"Downloading…":"Download"}
+                      </button>
+                    </div>
                   </div>
                   <div className="text-sm text-gray-600 truncate">{m.program_studi} · {m.kota}</div>
                 </div>

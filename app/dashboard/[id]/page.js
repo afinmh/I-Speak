@@ -78,6 +78,7 @@ function DetailContent() {
   const featureRef = useRef(null);
   const [processing, setProcessing] = useState(false);
   const [overall, setOverall] = useState(null); // {cefr, subscores}
+  const [downloadingAll, setDownloadingAll] = useState(false);
 
   async function processTask6() {
     if (!recTask6) return;
@@ -116,6 +117,75 @@ function DetailContent() {
     }
   }
 
+  function sanitizeName(name) {
+    const base = String(name || "student").normalize("NFKD").replace(/[^\w\s-]+/g, "").trim();
+    return base.replace(/\s+/g, "_");
+  }
+  function extFromContentType(ct) {
+    const c = String(ct || "").toLowerCase();
+    if (c.includes("audio/mpeg")) return ".mp3";
+    if (c.includes("audio/wav")) return ".wav";
+    if (c.includes("audio/ogg")) return ".ogg";
+    if (c.includes("audio/mp4")) return ".m4a";
+    if (c.includes("audio/webm")) return ".webm";
+    return ".webm";
+  }
+
+  async function downloadAllAudios() {
+    if (!recs.length || downloadingAll) return;
+    try {
+      setDownloadingAll(true);
+      let JSZip = null;
+      try { JSZip = (await import("jszip")).default; } catch (_) {}
+      const nameBase = sanitizeName(m?.nama);
+      const ordered = recs.slice().sort((a,b)=>Number(a.tugas_id)-Number(b.tugas_id));
+      if (JSZip) {
+        const zip = new JSZip();
+        for (const r of ordered) {
+          const resp = await fetch(`/api/media/rekaman/${r.id}`);
+          if (!resp.ok) continue;
+          const buf = await resp.arrayBuffer();
+          const ext = extFromContentType(resp.headers.get("content-type"));
+          const idx = Number(r.tugas_id) || 0;
+          const fname = `${nameBase}_test${idx}${ext}`;
+          zip.file(fname, buf);
+        }
+        const blob = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${nameBase}_audios.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else {
+        for (const r of ordered) {
+          const resp = await fetch(`/api/media/rekaman/${r.id}`);
+            if (!resp.ok) continue;
+            const blob = await resp.blob();
+            const ext = extFromContentType(resp.headers.get("content-type"));
+            const idx = Number(r.tugas_id) || 0;
+            const fname = `${nameBase}_test${idx}${ext}`;
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = fname;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            await new Promise((res)=>setTimeout(res,150));
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || "Failed to download audios");
+    } finally {
+      setDownloadingAll(false);
+    }
+  }
+
   return (
     <div className="min-h-[80vh] bg-gradient-to-b from-gray-50 to-white">
       <div className="max-w-6xl mx-auto px-4 py-5">
@@ -126,6 +196,19 @@ function DetailContent() {
           </div>
           <div className="flex items-center gap-2">
             <Link href="/dashboard" className="text-sm px-3 py-1.5 rounded-lg bg-white border hover:bg-gray-50 shadow-sm">← Back</Link>
+            <button
+              onClick={downloadAllAudios}
+              disabled={downloadingAll || !recs.length}
+              className={`text-sm px-3 py-1.5 rounded-lg flex items-center gap-2 shadow border border-black/30 bg-gradient-to-r from-black to-gray-700 text-white hover:from-gray-900 hover:to-black transition ${downloadingAll?"opacity-60 cursor-not-allowed":""}`}
+              title="Download all audio recordings"
+            >
+              {downloadingAll ? (
+                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" strokeOpacity="0.25" /><path d="M12 2a10 10 0 0 1 10 10" /></svg>
+              ) : (
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v11" /><path d="m6 11 6 6 6-6" /><path d="M4 19h16" /></svg>
+              )}
+              {downloadingAll?"Downloading…":"Download Audios"}
+            </button>
           </div>
         </div>
       {error && <div className="mt-3 p-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded">{error}</div>}

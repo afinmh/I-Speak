@@ -29,9 +29,13 @@ function extractStoragePath(urlOrPath) {
   return null;
 }
 
-export async function GET(req, { params }) {
+export async function GET(req, context) {
   try {
-    const id = Number(params?.id);
+    // In Next.js 15+ params may be a Promise; await before destructuring
+    const { params } = context;
+    const awaited = (typeof params?.then === "function") ? await params : params;
+    const idRaw = awaited?.id;
+    const id = Number(idRaw);
     if (!id) return new Response("Bad Request", { status: 400 });
 
     const supa = getServiceClient();

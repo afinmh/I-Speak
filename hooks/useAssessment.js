@@ -577,18 +577,17 @@ export default function useAssessment() {
     setFile(e.target.files?.[0] || null);
   }, []);
 
-  const run = useCallback(async () => {
-    if (!file) return;
-    if (model !== "whisper" && (!transcript || transcript.trim().length === 0)) {
-      setErrors((prev) => ({ ...prev, transcript: "Transcript is required when Whisper is disabled." }));
-      setStatus("Transcript required");
-      return;
-    }
+  const run = useCallback(async (options = {}) => {
+    const { skipModels = false, file: fileOverride, transcript: transcriptOverride, model: modelOverride } = options || {};
+    const f = fileOverride || file;
+    const modelUsed = modelOverride || model;
+    const transcriptUsedInitial = (typeof transcriptOverride === "string" ? transcriptOverride : transcript) || "";
+    if (!f) return;
     setResult(null);
     setErrors({});
     setStatus("Decoding audio...");
   try { console.time("[useAssessment] run"); console.log("[useAssessment] start", { model, fileName: file?.name }); } catch (_) {}
-  const buffer = await decodeFileToAudioBuffer(file);
+  const buffer = await decodeFileToAudioBuffer(f);
     const duration = buffer.duration;
     const channelData = buffer.getChannelData(0);
   try { console.timeLog("[useAssessment] run", "decoded", { duration, sampleRate: buffer.sampleRate }); } catch (_) {}
@@ -608,16 +607,22 @@ export default function useAssessment() {
 
     // Transcript source: Whisper or provided text
     let segments = null; // we won't use for features
-    let transcriptUsed = (transcript || "").trim();
-    if (model === "whisper") {
+    let transcriptUsed = (transcriptUsedInitial || "").trim();
+    if (modelUsed === "whisper") {
       setStatus("Transcribing with Whisper (text only)...");
       try {
-        const res = await transcribeWhisperWebFromFile(file, { model: "tiny.en", returnSegments: false });
+        const res = await transcribeWhisperWebFromFile(f, { model: "tiny.en", returnSegments: false });
         if (typeof res === "string") transcriptUsed = res;
         else if (res && res.text) transcriptUsed = res.text;
       } catch (e) {
         setErrors((prev) => ({ ...prev, asr: e?.message || String(e) }));
       }
+    }
+    if (modelUsed !== "whisper" && (!transcriptUsed || transcriptUsed.trim().length === 0)) {
+      setErrors((prev) => ({ ...prev, transcript: "Transcript is required when Whisper is disabled." }));
+      setStatus("Transcript required");
+      try { console.timeEnd("[useAssessment] run"); } catch (_) {}
+      return;
     }
 
   const tokens = tokenize(transcriptUsed || "");
@@ -759,8 +764,9 @@ export default function useAssessment() {
     features["Trigram Count"] = 0;
     features["Fourgram Count"] = 0;
   // Synonym variations (lemma diversity) and tree depth proxies
-  features["Synonym Variations"] = computeSynonymVariations(transcript);
-  const td = computeTreeDepthProxy(transcript);
+  // Use the effective transcriptUsed for synonym & tree depth (was using stale state before)
+  features["Synonym Variations"] = computeSynonymVariations(transcriptUsed);
+  const td = computeTreeDepthProxy(transcriptUsed);
   features["Avg Tree Depth"] = td.avg;
   features["Max Tree Depth"] = td.max;
 
@@ -821,8 +827,9 @@ export default function useAssessment() {
     features["Fourgram Count"] = Number(bundlesRes?.fourgram_count || 0);
     features["Topic Similarity (%)"] = Number(topicRes?.similarityPercent || 0);
 
-  setStatus("Calling model APIs...");
-  try { console.timeLog("[useAssessment] run", "models start"); } catch (_) {}
+  if (!skipModels) {
+    setStatus("Calling model APIs...");
+    try { console.timeLog("[useAssessment] run", "models start"); } catch (_) {}
     async function call(name, url) {
       try {
         const res = await fetch(url, {
@@ -863,8 +870,8 @@ export default function useAssessment() {
       CEFR: cefr?.error ? { label: "Error", value: null } : interpretOutput("CEFR", cefr?.result ?? cefr)
     };
 
-  setResult({
-  transcript: transcriptUsed,
+    setResult({
+      transcript: transcriptUsed,
       features,
       outputs: { flu, pro, proso, coh, topic, comp, acc, cefr },
       interpreted,
@@ -878,9 +885,30 @@ export default function useAssessment() {
         cefrWords: cefrRes?.wordLevels || {}
       }
     });
-  try { console.timeLog("[useAssessment] run", "models done"); console.timeEnd("[useAssessment] run"); } catch (_) {}
+    try { console.timeLog("[useAssessment] run", "models done"); console.timeEnd("[useAssessment] run"); } catch (_) {}
     setErrors((prev) => ({ ...prev, ...apiErrors }));
     setStatus("Done");
+  } else {
+    // Skip model API calls, but still return features and dataExtras
+    setResult({
+      transcript: transcriptUsed,
+      features,
+      outputs: null,
+      interpreted: null,
+      dataExtras: {
+        idioms: idiomsRes?.idioms || [],
+        bundles: {
+          bigrams: bundlesRes?.bigram_matches || [],
+          trigrams: bundlesRes?.trigram_matches || [],
+          fourgrams: bundlesRes?.fourgram_matches || []
+        },
+        cefrWords: cefrRes?.wordLevels || {}
+      }
+    });
+    try { console.timeEnd("[useAssessment] run"); } catch (_) {}
+    setErrors((prev) => ({ ...prev, ...apiErrors }));
+    setStatus("Done");
+  }
   }, [file, refTopic, model]);
 
   return {
