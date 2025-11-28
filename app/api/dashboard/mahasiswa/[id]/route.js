@@ -26,11 +26,13 @@ async function requireAuth(req /** @type {NextRequest} */) {
   return data.user;
 }
 
-export async function GET(req, { params }) {
+export async function GET(req, context) {
   try {
     const user = await requireAuth(req);
     if (!user) return error("Unauthorized", 401);
 
+    // Next.js dev warning suggests awaiting params; in latest can be a thenable
+    const params = await context.params;
     const id = Number(params?.id);
     if (!id) return error("Invalid mahasiswa id", 400);
 
