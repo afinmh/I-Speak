@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import AuthGate from "@/app/components/AuthGate";
+import { useUiState } from "@/app/components/UiStateProvider";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function ImagesAdminPage() {
@@ -15,6 +16,7 @@ export default function ImagesAdminPage() {
 }
 
 function ImagesContent() {
+  const ui = useUiState();
   const [topic, setTopic] = useState("");
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -22,6 +24,7 @@ function ImagesContent() {
   const [items, setItems] = useState([]);
 
   async function loadList() {
+    ui.start("Loading images…");
     const { data: sess } = await supabase.auth.getSession();
     const token = sess?.session?.access_token;
     const res = await fetch("/api/dashboard/images?limit=100", {
@@ -31,6 +34,7 @@ function ImagesContent() {
       const j = await res.json();
       setItems(Array.isArray(j?.items) ? j.items : []);
     }
+    ui.end();
   }
 
   useEffect(() => {
@@ -42,7 +46,7 @@ function ImagesContent() {
     setError("");
     if (!topic.trim()) { setError("Topic is required"); return; }
     if (!file) { setError("Image file is required"); return; }
-    setLoading(true);
+    setLoading(true); ui.start("Uploading image…");
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess?.session?.access_token;
@@ -63,7 +67,7 @@ function ImagesContent() {
     } catch (e) {
       setError(e?.message || String(e));
     } finally {
-      setLoading(false);
+      setLoading(false); ui.end();
     }
   }
 

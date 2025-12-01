@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import AuthGate from "@/app/components/AuthGate";
 import { supabase } from "@/lib/supabaseClient";
+import { useUiState } from "@/app/components/UiStateProvider";
 
 export default function DashboardDetailPage() {
   return (
@@ -15,6 +16,7 @@ export default function DashboardDetailPage() {
 }
 
 function DetailContent() {
+  const ui = useUiState();
   const params = useParams();
   const id = params?.id;
   const [data, setData] = useState(null);
@@ -25,7 +27,7 @@ function DetailContent() {
     if (!id) return;
     let active = true;
     async function load() {
-      setLoading(true); setError("");
+      setLoading(true); setError(""); ui.start("Loading detail…");
       const { data: sess } = await supabase.auth.getSession();
       const token = sess?.session?.access_token;
       try {
@@ -44,6 +46,7 @@ function DetailContent() {
         setError(e?.message || String(e));
       } finally {
         if (active) setLoading(false);
+        ui.end();
       }
     }
     load();
@@ -85,7 +88,7 @@ function DetailContent() {
   async function processTask6() {
     if (!recTask6) return;
     try {
-      setProcessing(true);
+      setProcessing(true); ui.start("Processing Task 6…");
       const res = await fetch(`/api/media/rekaman/${recTask6.id}`);
       if (!res.ok) throw new Error("Failed to fetch audio");
       const blob = await res.blob();
@@ -115,7 +118,7 @@ function DetailContent() {
       console.error(e);
       alert(e?.message || String(e));
     } finally {
-      setProcessing(false);
+      setProcessing(false); ui.end();
     }
   }
 

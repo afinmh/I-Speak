@@ -1,5 +1,6 @@
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { UiStateProvider } from "./components/UiStateProvider";
 import PreloadWhisper from "@/app/components/PreloadWhisper";
 
 const geistSans = Geist({
@@ -29,7 +30,9 @@ export default function RootLayout({ children }) {
       >
         {/* Preload Whisper model globally when the app starts */}
         <PreloadWhisper />
-        {children}
+        <UiStateProvider>
+          {children}
+        </UiStateProvider>
       </body>
     </html>
   );

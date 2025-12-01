@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import AuthGate from "@/app/components/AuthGate";
 import { supabase } from "@/lib/supabaseClient";
+import { useUiState } from "@/app/components/UiStateProvider";
 
 export default function DashboardPage() {
   return (
@@ -14,6 +15,7 @@ export default function DashboardPage() {
 }
 
 function DashboardContent() {
+  const ui = useUiState();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -21,11 +23,12 @@ function DashboardContent() {
   const [downloadingId, setDownloadingId] = useState(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadTotal, setDownloadTotal] = useState(0);
+  const [confirmDelete, setConfirmDelete] = useState(null); // { id, nama }
 
   useEffect(() => {
     let active = true;
     async function load() {
-      setLoading(true); setError("");
+      setLoading(true); setError(""); ui.start("Loading list…");
       const { data: sess } = await supabase.auth.getSession();
       const token = sess?.session?.access_token;
       try {
@@ -44,6 +47,7 @@ function DashboardContent() {
         setError(e?.message || String(e));
       } finally {
         if (active) setLoading(false);
+        ui.end();
       }
     }
     load();
@@ -188,7 +192,7 @@ function DashboardContent() {
           </div>
           <div className="flex items-center gap-2">
             <Link href="/dashboard/images" className="text-sm px-3 py-1.5 rounded-lg bg-white border hover:bg-gray-50 shadow-sm">Images Admin</Link>
-            <button onClick={async()=>{ await supabase.auth.signOut(); }} className="text-sm px-3 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-black shadow-sm">Sign out</button>
+            <button onClick={async()=>{ await ui.withBusy("Signing out…", async()=>supabase.auth.signOut()); }} className="text-sm px-3 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-black shadow-sm">Sign out</button>
           </div>
         </div>
 
@@ -215,17 +219,23 @@ function DashboardContent() {
                         {m.rekaman_count ?? 0} rec
                       </span>
                       <button
-                        onClick={(e)=>downloadAudiosForStudent(e, m)}
+                        onClick={(e)=>{ ui.start("Preparing ZIP…"); downloadAudiosForStudent(e, m).finally(()=>ui.end()); }}
                         disabled={downloadingId === m.id}
-                        className={`text-xs px-2 py-1 rounded flex items-center gap-1 shadow border border-black/30 bg-gradient-to-r from-black to-gray-700 text-white hover:from-gray-900 hover:to-black transition ${downloadingId===m.id?"opacity-60 cursor-not-allowed":""}`}
+                        className={`text-xs p-2 rounded flex items-center gap-1 shadow border border-black/30 bg-gradient-to-r from-black to-gray-700 text-white hover:from-gray-900 hover:to-black transition ${downloadingId===m.id?"opacity-60 cursor-not-allowed":""}`}
                         title="Download all audios as ZIP"
                       >
                         {downloadingId===m.id ? (
-                          <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" strokeOpacity="0.25" /><path d="M12 2a10 10 0 0 1 10 10" /></svg>
+                          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" strokeOpacity="0.25" /><path d="M12 2a10 10 0 0 1 10 10" /></svg>
                         ) : (
-                          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v11" /><path d="m6 11 6 6 6-6" /><path d="M4 19h16" /></svg>
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v11" /><path d="m6 11 6 6 6-6" /><path d="M4 19h16" /></svg>
                         )}
-                        {downloadingId===m.id?`Downloading…${downloadTotal?` (${downloadProgress}/${downloadTotal})`:""}`:"Download"}
+                      </button>
+                      <button
+                        onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); setConfirmDelete({ id: m.id, nama: m.nama }); }}
+                        className="text-xs p-2 rounded flex items-center gap-1 shadow border border-red-600 bg-red-600 text-white hover:bg-red-700"
+                        title="Delete user and all associated data"
+                      >
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6v-2h8v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
                       </button>
                     </div>
                   </div>
@@ -241,6 +251,54 @@ function DashboardContent() {
         </div>
       )}
       </div>
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={()=>setConfirmDelete(null)} />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-[92%] sm:w-[460px] bg-white rounded-2xl shadow-xl border">
+              <div className="p-5">
+                <div className="flex items-center gap-3">
+                  <div className="flex-none w-10 h-10 rounded-full bg-red-600 text-white flex items-center justify-center">
+                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6v-2h8v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold">Hapus semua data</div>
+                    <div className="text-sm text-gray-600">Mahasiswa: {confirmDelete.nama}</div>
+                  </div>
+                </div>
+                <div className="mt-3 text-sm text-gray-700">Tindakan ini akan menghapus seluruh rekaman, skor, dan data mahasiswa. Tindakan tidak dapat dibatalkan.</div>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button onClick={()=>setConfirmDelete(null)} className="px-3 py-2 rounded-lg border bg-white hover:bg-gray-50">Batal</button>
+                  <button
+                    onClick={async ()=>{
+                      const id = confirmDelete.id;
+                      setConfirmDelete(null);
+                      try {
+                        await ui.withBusy("Deleting user…", async ()=>{
+                          const { data: sess } = await supabase.auth.getSession();
+                          const token = sess?.session?.access_token;
+                          const res = await fetch(`/api/dashboard/mahasiswa/${id}/delete`, {
+                            method: "DELETE",
+                            headers: token ? { Authorization: `Bearer ${token}` } : {}
+                          });
+                          if (!res.ok) {
+                            const j = await res.json().catch(()=>({}));
+                            throw new Error(j?.error || "Delete failed");
+                          }
+                          setItems((prev)=>prev.filter((x)=>x.id !== id));
+                        });
+                      } catch (e) {
+                        alert(e?.message || "Delete failed");
+                      }
+                    }}
+                    className="px-3 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700"
+                  >Hapus</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
