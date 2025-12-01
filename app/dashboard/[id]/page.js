@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import AuthGate from "@/app/components/AuthGate";
 import { supabase } from "@/lib/supabaseClient";
 import { useUiState } from "@/app/components/UiStateProvider";
+import { subscribeWhisper, getWhisperState } from "@/lib/globalWhisperState";
+import FeatureComputer from "@/app/components/FeatureComputer";
 
 export default function DashboardDetailPage() {
   return (
@@ -58,49 +60,77 @@ function DetailContent() {
   // Find task 6 record id
   const recTask6 = recs.find((r) => Number(r?.tugas_id) === 6) || null;
 
-  // Inline feature computer (reuses useAssessment logic)
-  const FeatureComputer = forwardRef(function FC(_, ref) {
-    const useAssessment = require("@/hooks/useAssessment").default;
-    const { setFile, setRefTopic, setModel, setTranscript, run, result, status } = useAssessment();
-    const resolverRef = useRef(null);
-    useEffect(() => { if (result && resolverRef.current) { const res = resolverRef.current; resolverRef.current = null; res(result); } }, [result]);
-    useImperativeHandle(ref, () => ({
-      async computeFromBlob(blob, filename = "audio.webm", refTopic = "") {
-        return new Promise(async (resolve) => {
-          resolverRef.current = resolve;
-          try { setModel("whisper"); setTranscript(""); } catch (_) {}
-          const file = new File([blob], filename, { type: blob.type || "audio/webm" });
-          setRefTopic(refTopic);
-          setFile(file);
-          setTimeout(() => run(), 0);
-        });
-      }
-    }));
-    return null;
-  });
   const featureRef = useRef(null);
   const [processing, setProcessing] = useState(false);
   const [overall, setOverall] = useState(null); // {cefr, subscores}
   const [downloadingAll, setDownloadingAll] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadTotal, setDownloadTotal] = useState(0);
+  const [asrStatus, setAsrStatus] = useState("");
+  const [lastStatusAt, setLastStatusAt] = useState(0);
+  const [processingProgress, setProcessingProgress] = useState(0);
+  const prevStatusRef = useRef("");
+  const [whisper, setWhisper] = useState(getWhisperState());
+
+  // Keep whisper download progress synced
+  useEffect(() => {
+    const unsub = subscribeWhisper((st) => setWhisper(st));
+    return () => { if (typeof unsub === "function") unsub(); };
+  }, []);
+
+  const percentFromStatus = (s) => {
+    const m = String(s || "").match(/(\d{1,3})%/);
+    const n = m ? Number(m[1]) : null;
+    if (n !== null && isFinite(n)) return Math.max(0, Math.min(100, n));
+    return null;
+  };
 
   async function processTask6() {
-    if (!recTask6) return;
+    if (!recTask6) {
+      console.error("[processTask6] No task 6 recording found");
+      return;
+    }
+    console.log("[processTask6] START", { recId: recTask6.id });
     try {
-      setProcessing(true); ui.start("Processing Task 6…");
+      setProcessing(true);
+      setProcessingProgress(0);
+      setAsrStatus("Fetching audio...");
+      setLastStatusAt(Date.now());
+      
+      console.log("[processTask6] Fetching audio from /api/media/rekaman/" + recTask6.id);
       const res = await fetch(`/api/media/rekaman/${recTask6.id}`);
-      if (!res.ok) throw new Error("Failed to fetch audio");
+      if (!res.ok) {
+        console.error("[processTask6] Fetch failed", res.status);
+        throw new Error("Failed to fetch audio");
+      }
       const blob = await res.blob();
-      const r = await featureRef.current.computeFromBlob(blob, `task6_${recTask6.id}.webm`, "");
+      console.log("[processTask6] Audio fetched", { size: blob.size, type: blob.type });
+      
+      setAsrStatus("Starting feature extraction...");
+      setProcessingProgress(5);
+      
+      console.log("[processTask6] Calling compute");
+      const fileObj = new File([blob], `task6_${recTask6.id}.webm`, { type: blob.type || "audio/webm" });
+      const r = await featureRef.current.compute(fileObj, "");
+      console.log("[processTask6] Feature extraction done", { hasFeatures: !!r?.features, hasTranscript: !!r?.transcript });
+      
       const features = r?.features;
-      if (!features) throw new Error("Feature extraction failed");
-  // Save score server-side (batch API with single item)
-  await fetch("/api/score/batch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ items: [{ rekaman_id: recTask6.id, features }] }) });
+      if (!features) {
+        console.error("[processTask6] No features returned");
+        throw new Error("Feature extraction failed");
+      }
+      
+      console.log("[processTask6] Saving score to batch API");
+      // Save score server-side (batch API with single item)
+      await fetch("/api/score/batch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ items: [{ rekaman_id: recTask6.id, features }] }) });
+      
       // Upload transcript to rekaman
       if (r?.transcript) {
+        console.log("[processTask6] Uploading transcript", { length: r.transcript.length });
         await fetch(`/api/rekaman/${recTask6.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ transkrip: r.transcript }) });
       }
+      
+      console.log("[processTask6] Updating overall state");
       // Update overall panel from interpreted outputs and subscores
       setOverall({
         cefr: r?.interpreted?.CEFR?.label || recTask6?.score?.score_cefr || "-",
@@ -114,11 +144,14 @@ function DetailContent() {
           Accuracy: r?.interpreted?.Accuracy?.value ?? null
         }
       });
+      setProcessingProgress(100);
+      console.log("[processTask6] SUCCESS");
     } catch (e) {
-      console.error(e);
+      console.error("[processTask6] ERROR", e);
       alert(e?.message || String(e));
     } finally {
-      setProcessing(false); ui.end();
+      setProcessing(false);
+      setTimeout(() => { setProcessingProgress(0); setAsrStatus(""); }, 400);
     }
   }
 
@@ -297,10 +330,67 @@ function DetailContent() {
             )}
           </div>
           {/* hidden inline feature computer */}
-          <FeatureComputer ref={featureRef} />
+          <FeatureComputer
+            ref={featureRef}
+            onStatus={(s) => {
+              if (s !== prevStatusRef.current) {
+                prevStatusRef.current = s;
+                setAsrStatus(s);
+                setLastStatusAt(Date.now());
+              }
+              const p = percentFromStatus(s);
+              if (p !== null) {
+                setProcessingProgress(Math.max(0, Math.min(100, Math.round(p))));
+              }
+            }}
+          />
         </>
       )}
       </div>
+
+      {/* Processing overlay with Whisper download & progress */}
+      {processing && (
+        <div className="fixed inset-0 z-50 bg-white/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white border border-gray-100 shadow-xl p-5">
+            <div className="text-lg font-semibold">Processing Task 6</div>
+            <div className="text-sm text-gray-600 mt-1">Please wait, this may take a few minutes.</div>
+
+            {/* Whisper download progress (if still downloading) */}
+            {whisper?.downloading && (
+              <div className="mt-4">
+                <div className="flex items-center justify-between text-sm">
+                  <span>Downloading Whisper</span>
+                  <span>{Math.round(whisper.progress)}%</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded h-2 overflow-hidden">
+                  <div className="bg-black h-2" style={{ width: `${Math.round(whisper.progress)}%` }} />
+                </div>
+              </div>
+            )}
+
+            {/* Current ASR/compute status */}
+            <div className="mt-3 text-xs text-gray-600">
+              <span>{asrStatus || (whisper?.loaded ? "Starting..." : whisper?.status)}</span>
+              {lastStatusAt > 0 && Date.now() - lastStatusAt > 30000 && (
+                <span className="text-amber-600"> — still working… large model load or network, please wait</span>
+              )}
+            </div>
+
+            {/* Progress bar */}
+            <div className="mt-4">
+              <div className="flex items-center justify-between text-sm mb-1">
+                <span>Progress</span>
+                <span>{processingProgress}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded h-2 overflow-hidden">
+                <div className="h-2 bg-black" style={{ width: `${processingProgress}%` }} />
+              </div>
+            </div>
+
+            <div className="mt-4 text-xs text-gray-500">Tip: Keep this tab open during processing.</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
