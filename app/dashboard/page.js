@@ -191,7 +191,8 @@ function DashboardContent() {
             <p className="text-sm text-gray-600">Select a student to view their recordings and scores.</p>
           </div>
           <div className="flex items-center gap-2">
-            <Link href="/dashboard/images" className="text-sm px-3 py-1.5 rounded-lg bg-white border hover:bg-gray-50 shadow-sm">Images Admin</Link>
+            <Link href="/dashboard/tugas" className="text-sm px-3 py-1.5 rounded-lg bg-white border hover:bg-gray-50 shadow-sm">Tasks</Link>
+            <Link href="/dashboard/images" className="text-sm px-3 py-1.5 rounded-lg bg-white border hover:bg-gray-50 shadow-sm">Images</Link>
             <button onClick={async()=>{ await ui.withBusy("Signing out…", async()=>supabase.auth.signOut()); }} className="text-sm px-3 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-black shadow-sm">Sign out</button>
           </div>
         </div>

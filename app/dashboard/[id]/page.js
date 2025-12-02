@@ -136,7 +136,7 @@ function DetailContent() {
         cefr: r?.interpreted?.CEFR?.label || recTask6?.score?.score_cefr || "-",
         subs: {
           Fluency: r?.interpreted?.Fluency?.value ?? null,
-          Pronunciation: r?.interpreted?.Pronunciation?.value ?? null,
+          Pronoun: r?.interpreted?.Pronunciation?.value ?? null,
           Prosody: r?.interpreted?.Prosody?.value ?? null,
           Coherence: r?.interpreted?.["Coherence and Cohesion"]?.value ?? null,
           "Topic Relevance": r?.interpreted?.["Topic Relevance"]?.value ?? null,
@@ -250,10 +250,10 @@ function DetailContent() {
   return (
     <div className="min-h-[80vh] bg-gradient-to-b from-gray-50 to-white">
       <div className="max-w-6xl mx-auto px-4 py-5">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight">{m ? m.nama : "Mahasiswa"}</h1>
-            <div className="text-sm text-gray-600">{m?.program_studi} · {m?.kota} · Age {m?.umur}</div>
+            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">{m ? m.nama : "Mahasiswa"}</h1>
+            <div className="text-sm text-gray-600 mt-1">{m?.program_studi} · {m?.kota} · Age {m?.umur}</div>
           </div>
           <div className="flex items-center gap-2">
             <Link href="/dashboard" className="text-sm px-3 py-1.5 rounded-lg bg-white border hover:bg-gray-50 shadow-sm">← Back</Link>
@@ -282,28 +282,33 @@ function DetailContent() {
             const s = overall ? null : (recTask6?.score || null);
             const cefr = overall?.cefr || s?.score_cefr || "-";
             const subs = overall?.subs || (s ? {
-              Fluency: s.fluency, Pronunciation: s.pronunciation, Prosody: s.prosody,
+              Fluency: s.fluency, Pronoun: s.pronunciation, Prosody: s.prosody,
               Coherence: s.coherence, "Topic Relevance": s.topic_relevance, Complexity: s.complexity, Accuracy: s.accuracy
             } : null);
             const CEFR_DESC = { A1: "Beginner", A2: "Elementary", B1: "Intermediate", B2: "Upper-Intermediate", C1: "Advanced", C2: "Proficient" };
             const desc = CEFR_DESC[cefr] || "";
             return (
-              <div className="mt-4 p-4 border rounded-xl bg-white">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-gray-600">Overall</div>
-                  <div className="inline-flex items-center gap-2 bg-black text-white rounded-full px-3 py-1 text-sm">
-                    <span className="font-semibold">{cefr}</span>
-                    <span className="opacity-90">{desc}</span>
+              <div className="mt-4 p-6 border-2 rounded-2xl bg-gradient-to-br from-white to-gray-50 shadow-lg">
+                <div className="flex flex-col items-center justify-center gap-3 mb-6">
+                  <div className="text-sm font-medium text-gray-500 uppercase tracking-wider">Overall CEFR Level</div>
+                  <div className="flex items-center gap-4">
+                    <div className="text-6xl font-black text-black">{cefr}</div>
+                    <div className="text-left">
+                      <div className="text-2xl font-bold text-gray-800">{desc}</div>
+                    </div>
                   </div>
                 </div>
                 {subs && (
-                  <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                    {Object.entries(subs).map(([k,v]) => (
-                      <div key={k} className="flex items-center justify-between p-2 rounded border bg-white">
-                        <span className="text-gray-600">{k}</span>
-                        <span className="font-medium">{num(v)}</span>
-                      </div>
-                    ))}
+                  <div className="mt-6 pt-6 border-t">
+                    <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Sub-Components</div>
+                    <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
+                      {Object.entries(subs).map(([k,v]) => (
+                        <div key={k} className="flex flex-col items-center justify-center p-2 rounded-lg border bg-white hover:border-gray-400 transition">
+                          <span className="text-[10px] text-gray-500 mb-0.5 text-center leading-tight">{k}</span>
+                          <span className="text-lg font-bold text-black">{scoreToCEFR(v)}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
                 <div className="mt-3">
@@ -398,4 +403,12 @@ function DetailContent() {
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toFixed(2) : "-";
+}
+
+function scoreToCEFR(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n)) return "-";
+  const rounded = Math.round(n);
+  const mapping = { 0: "A1", 1: "A2", 2: "B1", 3: "B2", 4: "C1", 5: "C2" };
+  return mapping[rounded] || "A1";
 }

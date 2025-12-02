@@ -26,8 +26,8 @@ Legenda status:
 | Lexical Bundles | valid bi/tri/fourgrams | Endpoint bundles | ✅ | Fungsional.
 | Idioms | Matching list | Endpoint idioms | ✅ | Fungsional.
 | CEFR per kata | CSV | CSV | ✅ | Sudah.
-| CEFR final model | 7 skor subconstruct → CEFR | 7 skor subconstruct → CEFR | ✅ | Sudah diseragamkan; scaler masih placeholder.
-| Feature scaling | StandardScaler | Placeholder scaler CEFR | 🟡 | Perlu mean/std asli.
+| CEFR final model | 7 skor subconstruct → CEFR | 7 skor subconstruct → CEFR | ✅ | Sudah diseragamkan dan lengkap.
+| Feature scaling | StandardScaler | StandardScaler (JSON) | ✅ | Scaler dimuat dari file JSON training.
 
 ## Detail Checklist per Fitur
 
@@ -44,7 +44,7 @@ Legenda status:
 - Prosody prominences
   - [✅] Deteksi peak RMS; simpan jumlah peak dan mean/std jarak (detik).
 - Grammar Errors
-  - [🟡] Heuristik ringan (kapitalisasi/pungtuasi/kata berulang/a‑an/SVA dasar). Bisa ditingkatkan (LanguageTool).
+  - [✅] Enhanced heuristic dengan 10+ aturan: kapitalisasi, pungtuasi, kata berulang, a/an, SVA lengkap, word confusion, missing articles, double negatives, modal verbs, comparatives, than/then.
 - Synonym Variations
   - [✅] Ragam lemma konten via compromise (nouns/verbs/adjs/advs).
 - Avg/Max Tree Depth
@@ -54,17 +54,18 @@ Legenda status:
 - Lexical Bundles / Idioms
   - [✅] Sudah.
 - CEFR final model
-  - [🟡] Beda input: Python pakai 7 skor; Next.js pakai 39 fitur. Perlu diseragamkan.
+  - [✅] Sudah diseragamkan: CEFR menerima 7 skor subconstruct.
 - Feature scaling
-  - [🟡] CEFR scaler placeholder; butuh mean/std asli (dan model lain jika diperlukan).
+  - [✅] Semua model menggunakan scaler dari file JSON (mean, scale) yang dihasilkan dari training Python.
 
 ## Action Items (Prioritas)
 
-1) Feature scaling (CEFR): isi mean/std dari training Python ke `lib/modelLoader.js` → kurangi bias CEFR.
-2) Samakan pipeline CEFR: DONE — endpoint CEFR kini memakai 7 skor subconstruct sebagai input. Tinggal isi scaler.
-3) Prosody prominences dari RMS/peaks.
-5) Grammar Errors baseline dan Tree Depth proxy sederhana.
-6) (Opsional) MFCC vs TTS bila ingin cocok total dengan Python.
+1) ✅ Feature scaling: DONE — Semua model menggunakan scaler JSON dari training Python.
+2) ✅ Pipeline CEFR: DONE — endpoint CEFR memakai 7 skor subconstruct sebagai input.
+3) ✅ Prosody prominences dari RMS/peaks: DONE.
+4) ✅ Grammar Errors: Enhanced heuristic dengan 10+ aturan grammar.
+5) ✅ Tree Depth proxy: Rata-rata dan maksimum kata per kalimat.
+6) ✅ MFCC vs TTS: Implementasi cosine similarity dengan TTS reference.
 
 ## Catatan Teknis
 

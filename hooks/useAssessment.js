@@ -305,8 +305,7 @@ async function computeSemanticCoherence(text) {
   return (sum / count) * 100;
 }
 
-// Heuristic grammar error counter (no external API)
-// Heuristic grammar error counter: lightweight and capped to avoid runaway values
+// Heuristic grammar error counter: enhanced with more rules
 function computeGrammarErrors(text) {
   if (!text || typeof text !== "string") return 0;
   let errors = 0;
@@ -314,6 +313,7 @@ function computeGrammarErrors(text) {
     .split(/(?<=[.!?])\s+|\n+/)
     .map((s) => s.trim())
     .filter(Boolean);
+  
   // sentence capitalization & end punctuation
   for (const s of sents) {
     const trimmed = s.trim();
@@ -323,16 +323,20 @@ function computeGrammarErrors(text) {
     if (/^[a-z]/.test(firstWord) && !/^[A-Z]{2,}$/.test(firstWord)) errors++;
     if (!/[.!?]$/.test(trimmed)) errors++; // missing end punctuation
   }
-  // repeated adjacent words
+  
   const tokens = tokenize(text);
+  const words = tokens;
+  
+  // repeated adjacent words
   for (let i = 1; i < tokens.length; i++) {
     if (tokens[i] === tokens[i - 1]) errors++;
   }
+  
   // double or more spaces
   const multiSpaceMatches = text.match(/ {2,}/g);
   if (multiSpaceMatches) errors += multiSpaceMatches.length;
+  
   // a/an mismatch (rough heuristic, ignore some exceptions)
-  const words = tokens;
   const vowels = new Set(["a","e","i","o","u"]);
   for (let i = 0; i < words.length - 1; i++) {
     const w = words[i], next = words[i + 1] || "";
@@ -346,14 +350,84 @@ function computeGrammarErrors(text) {
       if (!/^hour/.test(next)) errors++;
     }
   }
-  // very basic subject-verb agreement for he/she/it + bare verb
-  const badPairs = new Set(["go","make","do","say","eat","play","run","walk","need","want"]);
+  
+  // Enhanced subject-verb agreement checks
+  const singularSubjects = new Set(["he", "she", "it"]);
+  const pluralSubjects = new Set(["they", "we"]);
+  const bareVerbs = new Set(["go","make","do","say","eat","play","run","walk","need","want","have","take","get","see","know","think","come","give","use","find","tell","ask","work","seem","feel","try","leave","call","write","read","bring","begin","keep","hold","hear","meet","show","help","talk","turn","follow","start","live","believe","watch","learn","change","lead","understand","happen","develop","speak","spend","teach","require","lose","become","reach"]);
+  const singularVerbs = new Set(["goes","makes","does","says","eats","plays","runs","walks","needs","wants","has","takes","gets","sees","knows","thinks","comes","gives","uses","finds","tells","asks","works","seems","feels","tries","leaves","calls","writes","reads","brings","begins","keeps","holds","hears","meets","shows","helps","talks","turns","follows","starts","lives","believes","watches","learns","changes","leads","understands","happens","develops","speaks","spends","teaches","requires","loses","becomes","reaches"]);
+  
   for (let i = 0; i < words.length - 1; i++) {
-    const w = words[i], v = words[i + 1];
-    if ((w === "he" || w === "she" || w === "it") && badPairs.has(v)) errors++;
+    const subj = words[i], verb = words[i + 1];
+    // Singular subject + bare verb (should be singular verb)
+    if (singularSubjects.has(subj) && bareVerbs.has(verb)) errors++;
+    // Plural subject + singular verb (should be bare verb)
+    if (pluralSubjects.has(subj) && singularVerbs.has(verb)) errors++;
+    // "I" with singular verb
+    if (subj === "i" && singularVerbs.has(verb) && verb !== "was") errors++;
   }
+  
+  // Common word confusions
+  const confusionPairs = {
+    "your": ["you're", /\byour\s+(is|are|was|were|have|has)\b/i],
+    "their": ["they're", /\btheir\s+(is|are|was|were|have|has)\b/i],
+    "its": ["it's", /\bits\s+(is|are|was|were|have|has)\b/i],
+  };
+  for (const [word, [correct, pattern]] of Object.entries(confusionPairs)) {
+    if (pattern.test(text)) errors++;
+  }
+  
+  // Missing articles before singular countable nouns
+  const articles = new Set(["a", "an", "the"]);
+  const prepositions = new Set(["in","on","at","to","for","with","from","by","about","of"]);
+  const commonNouns = new Set(["book","car","house","dog","cat","person","thing","way","time","day","year","place","problem","question","student","teacher","university","course","computer","phone","idea","experience","opportunity","challenge"]);
+  
+  for (let i = 1; i < words.length; i++) {
+    const prev = words[i - 1];
+    const curr = words[i];
+    // Check if noun appears after preposition without article
+    if (prepositions.has(prev) && commonNouns.has(curr)) {
+      // Check if there's no article in previous 2 positions
+      const hasPrevArticle = i >= 2 && articles.has(words[i - 2]);
+      if (!hasPrevArticle) errors++;
+    }
+  }
+  
+  // Double negatives
+  const negatives = new Set(["no", "not", "never", "nothing", "nobody", "none", "neither", "nowhere", "hardly", "scarcely", "barely"]);
+  for (let i = 0; i < words.length - 3; i++) {
+    const window = words.slice(i, i + 4);
+    const negCount = window.filter(w => negatives.has(w)).length;
+    if (negCount >= 2) errors++;
+  }
+  
+  // Wrong verb forms after modal verbs
+  const modals = new Set(["will", "would", "can", "could", "should", "must", "may", "might"]);
+  for (let i = 0; i < words.length - 1; i++) {
+    const modal = words[i];
+    const next = words[i + 1];
+    if (modals.has(modal)) {
+      // Next word should be bare infinitive, not -ing or -ed form
+      if (/ing$/.test(next) || (/ed$/.test(next) && !bareVerbs.has(next))) errors++;
+    }
+  }
+  
+  // Incomplete comparatives (more/less without adjective)
+  for (let i = 0; i < words.length - 1; i++) {
+    if ((words[i] === "more" || words[i] === "less") && 
+        (words[i + 1] === "than" || words[i + 1] === "then")) {
+      errors++;
+    }
+  }
+  
+  // "Than" vs "then" confusion in comparisons
+  const comparatives = new Set(["better", "worse", "more", "less", "greater", "smaller", "bigger", "faster", "slower"]);
+  for (let i = 0; i < words.length - 1; i++) {
+    if (comparatives.has(words[i]) && words[i + 1] === "then") errors++;
+  }
+  
   // Cap the total to avoid over-penalizing long texts
-  const cap = Math.max(5, Math.round(tokens.length * 0.1));
+  const cap = Math.max(5, Math.round(tokens.length * 0.15));
   return Math.min(errors, cap);
 }
 

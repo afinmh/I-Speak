@@ -1,0 +1,9 @@
+INFERENCE PIPELINE (JS VERSION)
+===============================
+
+1. Load scaler JSON for each subconstruct.
+   - Apply: (input - mean) / scale
+2. Pass scaled data to the generated JS function (e.g., Accuracy_rf_model.js).
+3. Collect predictions from all 7 subconstructs.
+4. Pass these 7 predictions to CEFR_rf_model.js (No scaling needed for this step).
+Expected CV accuracy: 0.3516 ± 0.1231

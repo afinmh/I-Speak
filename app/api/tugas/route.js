@@ -31,3 +31,32 @@ export async function GET(req /** @type {NextRequest} */) {
     return error(e?.message || "Gagal mengambil tugas", 500);
   }
 }
+
+export async function PATCH(req /** @type {NextRequest} */) {
+  try {
+    const body = await req.json();
+    const { id, judul, kategori, teks, prep_time, record_time } = body;
+    
+    if (!id) return error("ID tugas diperlukan", 400);
+
+    const supa = getServiceClient();
+    const updates = {};
+    if (judul !== undefined) updates.judul = judul;
+    if (kategori !== undefined) updates.kategori = kategori;
+    if (teks !== undefined) updates.teks = teks;
+    if (prep_time !== undefined) updates.prep_time = Number(prep_time);
+    if (record_time !== undefined) updates.record_time = Number(record_time);
+
+    const { data, error: dberr } = await supa
+      .from("tugas")
+      .update(updates)
+      .eq("id", Number(id))
+      .select()
+      .single();
+
+    if (dberr) return error(dberr.message, 500);
+    return json({ ok: true, tugas: data });
+  } catch (e) {
+    return error(e?.message || "Gagal mengupdate tugas", 500);
+  }
+}
