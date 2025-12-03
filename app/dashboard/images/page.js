@@ -30,6 +30,12 @@ function ImagesContent() {
     const res = await fetch("/api/dashboard/images?limit=100", {
       headers: token ? { Authorization: `Bearer ${token}` } : {}
     });
+    if (res.status === 401) {
+      console.warn("[Images] Token expired, clearing local session...");
+      await supabase.auth.signOut({ scope: 'local' });
+      ui.end();
+      return;
+    }
     if (res.ok) {
       const j = await res.json();
       setItems(Array.isArray(j?.items) ? j.items : []);
@@ -58,6 +64,11 @@ function ImagesContent() {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: fd
       });
+      if (res.status === 401) {
+        console.warn("[Images] Token expired, clearing local session...");
+        await supabase.auth.signOut({ scope: 'local' });
+        return;
+      }
       if (!res.ok) {
         const j = await res.json().catch(()=>({}));
         throw new Error(j?.error || "Upload failed");

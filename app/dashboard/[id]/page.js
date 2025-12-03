@@ -36,6 +36,11 @@ function DetailContent() {
         const res = await fetch(`/api/dashboard/mahasiswa/${id}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {}
         });
+        if (res.status === 401) {
+          console.warn("[Dashboard Detail] Token expired or unauthorized, clearing local session...");
+          await supabase.auth.signOut({ scope: 'local' });
+          return;
+        }
         if (!res.ok) {
           const j = await res.json().catch(()=>({}));
           throw new Error(j?.error || "Failed to load mahasiswa detail");
@@ -111,7 +116,10 @@ function DetailContent() {
       
       console.log("[processTask6] Calling compute");
       const fileObj = new File([blob], `task6_${recTask6.id}.webm`, { type: blob.type || "audio/webm" });
-      const r = await featureRef.current.compute(fileObj, "");
+      // Use task 6 text as reference topic for Topic Relevance calculation
+      const refTopic = recTask6?.tugas_teks || "";
+      console.log("[processTask6] Using reference topic:", refTopic);
+      const r = await featureRef.current.compute(fileObj, refTopic);
       console.log("[processTask6] Feature extraction done", { hasFeatures: !!r?.features, hasTranscript: !!r?.transcript });
       
       const features = r?.features;
@@ -408,7 +416,11 @@ function num(v) {
 function scoreToCEFR(score) {
   const n = Number(score);
   if (!Number.isFinite(n)) return "-";
-  const rounded = Math.round(n);
-  const mapping = { 0: "A1", 1: "A2", 2: "B1", 3: "B2", 4: "C1", 5: "C2" };
-  return mapping[rounded] || "A1";
+  // Use range-based mapping like in featureMapping.js
+  if (n <= 0.5) return "A1";
+  if (n <= 1.5) return "A2";
+  if (n <= 2.5) return "B1";
+  if (n <= 3.5) return "B2";
+  if (n <= 4.5) return "C1";
+  return "C2";
 }

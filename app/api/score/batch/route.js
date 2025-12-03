@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { json, error } from "../../_utils/respond";
 import { getServiceClient } from "@/lib/supabaseServer";
-import { buildSubconstructVector, CEFR_MAPPING } from "@/lib/featureMapping";
+import { buildSubconstructVector, getCEFRLabel } from "@/lib/featureMapping";
 import { loadModel } from "@/lib/modelLoader";
 
 export const runtime = "nodejs";
@@ -57,7 +57,7 @@ export async function POST(req /** @type {NextRequest} */) {
       }
       const cefrModel = await loadModel("CEFR", { baseUrl });
       const cefrIdx = numericFromRaw(cefrModel.predict(keys.map((k) => scores[k])));
-      const score_cefr = CEFR_MAPPING[cefrIdx] || "B2";
+      const score_cefr = getCEFRLabel(cefrIdx);
 
       const payload = {
         rekaman_id,

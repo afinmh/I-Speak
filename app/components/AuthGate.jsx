@@ -43,6 +43,37 @@ export default function AuthGate({ children }) {
     await supabase.auth.signOut();
   }
 
+  // Listen for auth errors globally and auto-logout
+  useEffect(() => {
+    if (!session) return;
+    
+    const handleAuthError = async (response) => {
+      if (response?.status === 401) {
+        console.warn("[AuthGate] Detected 401 Unauthorized, clearing local session...");
+        // Clear local session without server request since token is expired
+        await supabase.auth.signOut({ scope: 'local' });
+      }
+    };
+
+    // Intercept fetch globally for 401 errors
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+      try {
+        const response = await originalFetch(...args);
+        if (response.status === 401 && args[0]?.includes?.('/api/dashboard')) {
+          await handleAuthError(response);
+        }
+        return response;
+      } catch (error) {
+        throw error;
+      }
+    };
+
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, [session]);
+
   if (loading) {
     return (
       <div className="min-h-[50vh] flex items-center justify-center text-gray-600">Checking session…</div>

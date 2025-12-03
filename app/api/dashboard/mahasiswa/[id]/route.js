@@ -63,23 +63,24 @@ export async function GET(req, context) {
       }
     }
 
-    // fetch tugas titles (if tugas table exists)
+    // fetch tugas data including text field
     const tugasIds = Array.from(new Set((rekaman || []).map((r) => r.tugas_id))).filter(Boolean);
-    let tugasTitle = {};
+    let tugasData = {};
     if (tugasIds.length) {
       const { data: tugas } = await supa
         .from("tugas")
-        .select("id, judul")
+        .select("id, judul, teks")
         .in("id", tugasIds);
       if (Array.isArray(tugas)) {
-        for (const t of tugas) tugasTitle[t.id] = t.judul;
+        for (const t of tugas) tugasData[t.id] = { judul: t.judul, teks: t.teks };
       }
     }
 
     const recOut = (rekaman || []).map((r) => ({
       ...r,
       score: scoresByRec[r.id] || null,
-      tugas_title: tugasTitle[r.tugas_id] || null,
+      tugas_title: tugasData[r.tugas_id]?.judul || null,
+      tugas_teks: tugasData[r.tugas_id]?.teks || null,
     }));
 
     return json({ ok: true, mahasiswa, rekaman: recOut });

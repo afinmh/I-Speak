@@ -35,6 +35,11 @@ function DashboardContent() {
         const res = await fetch("/api/dashboard/mahasiswa", {
           headers: token ? { Authorization: `Bearer ${token}` } : {}
         });
+        if (res.status === 401) {
+          console.warn("[Dashboard] Token expired or unauthorized, clearing local session...");
+          await supabase.auth.signOut({ scope: 'local' });
+          return;
+        }
         if (!res.ok) {
           const j = await res.json().catch(()=>({}));
           throw new Error(j?.error || "Failed to load mahasiswa");
@@ -70,6 +75,11 @@ function DashboardContent() {
     const res = await fetch(`/api/dashboard/mahasiswa/${id}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {}
     });
+    if (res.status === 401) {
+      console.warn("[Dashboard] Token expired, clearing local session...");
+      await supabase.auth.signOut({ scope: 'local' });
+      throw new Error("Session expired");
+    }
     if (!res.ok) throw new Error("Failed to load student detail");
     return await res.json();
   }
@@ -193,7 +203,22 @@ function DashboardContent() {
           <div className="flex items-center gap-2">
             <Link href="/dashboard/tugas" className="text-sm px-3 py-1.5 rounded-lg bg-white border hover:bg-gray-50 shadow-sm">Tasks</Link>
             <Link href="/dashboard/images" className="text-sm px-3 py-1.5 rounded-lg bg-white border hover:bg-gray-50 shadow-sm">Images</Link>
-            <button onClick={async()=>{ await ui.withBusy("Signing out…", async()=>supabase.auth.signOut()); }} className="text-sm px-3 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-black shadow-sm">Sign out</button>
+            <button 
+              onClick={async()=>{ 
+                try {
+                  ui.start("Signing out…");
+                  await supabase.auth.signOut();
+                  window.location.href = '/dashboard';
+                } catch (e) {
+                  console.error('Sign out error:', e);
+                } finally {
+                  ui.end();
+                }
+              }} 
+              className="text-sm px-3 py-1.5 rounded-lg bg-gray-900 text-white hover:bg-black shadow-sm"
+            >
+              Sign out
+            </button>
           </div>
         </div>
 
